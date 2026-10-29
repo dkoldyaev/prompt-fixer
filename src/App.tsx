@@ -1,194 +1,209 @@
 import React, { useState, useEffect } from 'react';
-import { Header } from './components/Header';
-import { ModelSelector } from './components/ModelSelector';
-import { LanguageSelector } from './components/LanguageSelector';
-import { PromptInput } from './components/PromptInput';
-import { PromptOutput } from './components/PromptOutput';
-import { SettingsModal } from './components/SettingsModal';
-import { PresetsModal } from './components/PresetsModal';
-import { RulesExplainerModal } from './components/RulesExplainerModal';
-import { StructuredPromptResult, TargetLanguage, TargetModel } from './types';
-import { buildMetaPrompt } from './services/metaPromptBuilder';
-import { generateLocalStructuredPrompt } from './services/smartRewriter';
+import { Copy, Check, ArrowRight, Loader2, Sparkles } from 'lucide-react';
 
-const THEODOR_RAW_PROMPT = `Помоги составить режим сна для ребенка Теодора 10 месяцев. У него сейчас утреннее пробуждение сдвигается все раньше и раньше, получается 23 часа в сутках вместо 24: спит ночью 10-10.5 часов, бодрствует 10 часов, и два дневных сна на 2.5-3 часа. Нужно мягко растянуть сутки до 24 часов без стресса и слез. Напиши конкретно что делать.`;
+interface ModelItem {
+  id: string;
+  name: string;
+}
+
+const LANGUAGES = [
+  { id: 'ru', name: 'Русский' },
+  { id: 'en', name: 'English' },
+  { id: 'es', name: 'Español' },
+  { id: 'de', name: 'Deutsch' },
+  { id: 'fr', name: 'Français' },
+  { id: 'zh', name: '中文' },
+];
 
 export const App: React.FC = () => {
-  const [rawPrompt, setRawPrompt] = useState<string>(THEODOR_RAW_PROMPT);
-  const [targetModel, setTargetModel] = useState<TargetModel>('gpt');
-  const [targetLanguage, setTargetLanguage] = useState<TargetLanguage>('ru');
-  const [additionalInstructions, setAdditionalInstructions] = useState<string>('');
-  const [result, setResult] = useState<StructuredPromptResult | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [executionSource, setExecutionSource] = useState<'llm' | 'smart_optimizer'>('smart_optimizer');
-  const [executionNote, setExecutionNote] = useState<string | null>(null);
+  const [inputPrompt, setInputPrompt] = useState('');
+  const [outputPrompt, setOutputPrompt] = useState('');
+  const [availableModels, setAvailableModels] = useState<ModelItem[]>([]);
+  const [selectedModel, setSelectedModel] = useState<string>('gemini');
+  const [selectedLanguage, setSelectedLanguage] = useState<string>('ru');
+  const [isLoading, setIsLoading] = useState(false);
+  const [isCopied, setIsCopied] = useState(false);
 
-  // Modals
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isPresetsOpen, setIsPresetsOpen] = useState(false);
-  const [isRulesOpen, setIsRulesOpen] = useState(false);
+  // Загрузка доступных моделей с сервера (только те, для которых есть ключи)
+  useEffect(() => {
+    fetch('/api/models')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.models && data.models.length > 0) {
+          setAvailableModels(data.models);
+          setSelectedModel(data.models[0].id);
+        }
+      })
+      .catch((err) => console.warn('Failed to load models:', err));
+  }, []);
 
-  // API Keys in LocalStorage
-  const [apiKeys, setApiKeys] = useState<{ gemini?: string; openai?: string; mistral?: string }>(() => {
-    try {
-      const saved = localStorage.getItem('prompt_architect_api_keys');
-      return saved ? JSON.parse(saved) : {};
-    } catch {
-      return {};
-    }
-  });
-
-  const handleSaveKeys = (keys: { gemini?: string; openai?: string; mistral?: string }) => {
-    setApiKeys(keys);
-    localStorage.setItem('prompt_architect_api_keys', JSON.stringify(keys));
-  };
-
-  const handleRewrite = async () => {
-    if (!rawPrompt.trim()) return;
+  const handleRewrite = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!inputPrompt.trim() || isLoading) return;
 
     setIsLoading(true);
-    setExecutionNote(null);
-
     try {
-      const response = await fetch('/api/rewrite', {
+      const res = await fetch('/api/rewrite', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          rawPrompt,
-          targetModel,
-          targetLanguage,
-          additionalInstructions,
-          apiKeys,
+          rawPrompt: inputPrompt,
+          targetModel: selectedModel,
+          targetLanguage: selectedLanguage,
         }),
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        if (data.result) {
-          setResult(data.result);
-          setExecutionSource(data.source || 'smart_optimizer');
-          setExecutionNote(data.executionNote || null);
-          setIsLoading(false);
-          return;
-        }
+      const data = await res.json();
+      if (data.rewrittenPrompt) {
+        setOutputPrompt(data.rewrittenPrompt);
       }
     } catch (err) {
-      console.warn('API fetch failed, falling back to client-side smart optimizer:', err);
+      console.error('Rewrite failed:', err);
+    } finally {
+      setIsLoading(false);
     }
-
-    // Если бэкенд не ответил или вернул ошибку, бесшовно используем клиентский генератор
-    const metaPrompt = buildMetaPrompt(rawPrompt, targetModel, targetLanguage, additionalInstructions);
-    const localResult = generateLocalStructuredPrompt(rawPrompt, targetModel, targetLanguage, metaPrompt);
-
-    setResult(localResult);
-    setExecutionSource('smart_optimizer');
-    setIsLoading(false);
   };
 
-  // Автоматический рерайт при первом запуске с примером Теодора
-  useEffect(() => {
-    handleRewrite();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const handleCopy = async () => {
+    if (!outputPrompt) return;
+    try {
+      await navigator.clipboard.writeText(outputPrompt);
+      setIsCopied(true);
+      setTimeout(() => setIsCopied(false), 2000);
+    } catch (err) {
+      console.error('Copy failed:', err);
+    }
+  };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-brand-500 selection:text-white">
-      {/* Top Header */}
-      <Header
-        onOpenSettings={() => setIsSettingsOpen(true)}
-        onOpenPresets={() => setIsPresetsOpen(true)}
-        onOpenRules={() => setIsRulesOpen(true)}
-        hasCustomKeys={Boolean(apiKeys.gemini || apiKeys.openai || apiKeys.mistral)}
-      />
-
-      {/* Main Workspace */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {/* Controls Bar: Model & Language */}
-        <section className="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 mb-6 backdrop-blur-sm shadow-xl space-y-5">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800">
-            <div>
-              <h2 className="text-base font-bold text-white flex items-center gap-2">
-                Параметры трансформации
-              </h2>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Выберите целевую языковую модель и язык вывода. Архитектура промпта и мета-запрос адаптируются автоматически.
-              </p>
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center p-4 sm:p-8 font-sans selection:bg-blue-600 selection:text-white">
+      <div className="w-full max-w-3xl space-y-6 my-auto py-6">
+        {/* Заголовок */}
+        <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white shadow-md shadow-blue-600/30">
+              <Sparkles className="w-4 h-4" />
             </div>
+            <h1 className="text-xl font-bold tracking-tight text-white">Prompt Fixer</h1>
           </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
-            <div className="lg:col-span-2">
-              <ModelSelector
-                selectedModel={targetModel}
-                onSelectModel={(model) => {
-                  setTargetModel(model);
-                }}
-              />
-            </div>
-            <div className="lg:col-span-1">
-              <LanguageSelector
-                selectedLanguage={targetLanguage}
-                onSelectLanguage={(lang) => {
-                  setTargetLanguage(lang);
-                }}
-              />
-            </div>
-          </div>
-        </section>
-
-        {/* Two Columns: Input and Output */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
-          {/* Left: Input */}
-          <section className="space-y-4">
-            <PromptInput
-              value={rawPrompt}
-              onChange={setRawPrompt}
-              onSubmit={handleRewrite}
-              isLoading={isLoading}
-              onLoadExample={() => {
-                setRawPrompt(THEODOR_RAW_PROMPT);
-                setTargetModel('gpt');
-                setTargetLanguage('ru');
-              }}
-              additionalInstructions={additionalInstructions}
-              onChangeAdditionalInstructions={setAdditionalInstructions}
-            />
-          </section>
-
-          {/* Right: Output */}
-          <section className="space-y-4">
-            <PromptOutput
-              result={result}
-              isLoading={isLoading}
-              source={executionSource}
-              executionNote={executionNote}
-            />
-          </section>
+          <span className="text-xs text-slate-400 font-mono">2-Tier Architecture</span>
         </div>
-      </main>
 
-      {/* Modals */}
-      <SettingsModal
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        apiKeys={apiKeys}
-        onSaveKeys={handleSaveKeys}
-      />
+        {/* Форма */}
+        <form onSubmit={handleRewrite} className="space-y-4">
+          {/* Панель настроек: Модель и Язык */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {/* Селектор модели (только те, для которых есть ключи) */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                Модель
+              </label>
+              <select
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
+              >
+                {availableModels.length > 0 ? (
+                  availableModels.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))
+                ) : (
+                  <option value="gemini">Gemini</option>
+                )}
+              </select>
+            </div>
 
-      <PresetsModal
-        isOpen={isPresetsOpen}
-        onClose={() => setIsPresetsOpen(false)}
-        onSelectPreset={(preset) => {
-          setRawPrompt(preset.rawPrompt);
-          setTargetModel(preset.targetModel);
-          setTargetLanguage(preset.targetLanguage);
-        }}
-      />
+            {/* Выбор языка */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                Язык вывода
+              </label>
+              <select
+                value={selectedLanguage}
+                onChange={(e) => setSelectedLanguage(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
+              >
+                {LANGUAGES.map((lang) => (
+                  <option key={lang.id} value={lang.id}>
+                    {lang.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
 
-      <RulesExplainerModal
-        isOpen={isRulesOpen}
-        onClose={() => setIsRulesOpen(false)}
-      />
+          {/* Поле ввода */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+              Исходный промпт
+            </label>
+            <textarea
+              value={inputPrompt}
+              onChange={(e) => setInputPrompt(e.target.value)}
+              placeholder="Введите сюда ваш черновой промпт..."
+              rows={6}
+              className="w-full bg-slate-900 border border-slate-800 rounded-xl p-4 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition leading-relaxed resize-y"
+            />
+          </div>
+
+          {/* Кнопка отправки */}
+          <button
+            type="submit"
+            disabled={!inputPrompt.trim() || isLoading}
+            className={`w-full py-3 px-5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition duration-150 shadow-md ${
+              !inputPrompt.trim() || isLoading
+                ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700/50'
+                : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/30'
+            }`}
+          >
+            {isLoading ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>Переписываю по правилам...</span>
+              </>
+            ) : (
+              <>
+                <span>Переписать</span>
+                <ArrowRight className="w-4 h-4" />
+              </>
+            )}
+          </button>
+        </form>
+
+        {/* Результат */}
+        {outputPrompt && (
+          <div className="space-y-2 pt-2 animate-fade-in">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                Отредактированный промпт
+              </label>
+              <button
+                type="button"
+                onClick={handleCopy}
+                className="flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 transition py-1 px-2.5 rounded-lg hover:bg-blue-500/10"
+              >
+                {isCopied ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-emerald-400">Скопировано!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>Скопировать</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 font-sans text-sm text-slate-200 leading-relaxed whitespace-pre-wrap max-h-[550px] overflow-y-auto">
+              {outputPrompt}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 };
