@@ -1,7 +1,7 @@
 import OpenAI from 'openai';
 import { zodResponseFormat } from 'openai/helpers/zod';
 import { z } from 'zod';
-import { Agent } from 'undici';
+import { Agent, fetch as undiciFetch } from 'undici';
 import { getConfig } from '../shared/config';
 import {
   RequirementsAnalysis,
@@ -103,7 +103,7 @@ export async function executeStructuredLLMCall<T>(
   const client = new OpenAI({
     apiKey: config.OPENAI_API_KEY,
     timeout: config.AI_REQUEST_TIMEOUT_MS,
-    httpAgent: undiciAgent,
+    fetch: undiciFetch as any,
     fetchOptions: {
       dispatcher: undiciAgent,
     } as any,
