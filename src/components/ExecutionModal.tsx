@@ -13,6 +13,7 @@ import {
   Copy,
   Check,
   X,
+  RefreshCw,
 } from 'lucide-react';
 import { JobProgressEvent, JobStatus } from '../../packages/shared/types';
 
@@ -22,6 +23,7 @@ interface ExecutionModalProps {
   jobId?: string | null;
   onCancel: () => void;
   onClose?: () => void;
+  onRetry?: () => void;
 }
 
 export const ExecutionModal: React.FC<ExecutionModalProps> = ({
@@ -30,6 +32,7 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
   jobId,
   onCancel,
   onClose,
+  onRetry,
 }) => {
   const [activePreviewTab, setActivePreviewTab] = useState<'analyzer' | 'architect' | 'prompts'>('analyzer');
   const [copiedLink, setCopiedLink] = useState(false);
@@ -336,7 +339,35 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
               </>
             )}
 
-            {(event.status === 'completed' || event.status === 'failed' || event.status === 'cancelled') && (
+            {event.status === 'failed' && onRetry && (
+              <button
+                onClick={onRetry}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition-colors shadow-lg shadow-indigo-600/20 flex items-center gap-1.5"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Повторить генерацию</span>
+              </button>
+            )}
+
+            {event.status === 'failed' && (
+              <button
+                onClick={onClose}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold transition-colors"
+              >
+                Закрыть
+              </button>
+            )}
+
+            {event.status === 'cancelled' && (
+              <button
+                onClick={onClose}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold transition-colors"
+              >
+                Закрыть
+              </button>
+            )}
+
+            {event.status === 'completed' && (
               <button
                 onClick={onClose}
                 className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition-colors shadow-lg shadow-indigo-600/20"

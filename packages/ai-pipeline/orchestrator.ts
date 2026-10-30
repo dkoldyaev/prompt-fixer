@@ -32,6 +32,10 @@ export interface PipelineExecutionOptions {
   targetEnvironment: TargetEnvironment;
   mode: GenerationMode;
   preferences?: Partial<UserPreferences>;
+  resumeIntermediate?: {
+    analyzer?: RequirementsAnalysis;
+    architect?: SolutionArchitecture;
+  };
   onProgress?: (event: JobProgressEvent) => void;
   checkCancelled?: () => boolean;
 }
@@ -208,54 +212,70 @@ export class PipelineOrchestrator {
     const cumulativeIntermediate: any = {};
 
     // STAGE 1: REQUIREMENTS ANALYZER
-    notify('analyzing', 'requirements_analysis', 15, 'Этап 1/4: Детальный анализ и категоризация требований (gpt-6.1-terra)...');
-    const analyzerTemplate = getPromptTemplate('requirements-analyzer');
+    let analyzerData: RequirementsAnalysis;
+    if (options.resumeIntermediate?.analyzer) {
+      analyzerData = options.resumeIntermediate.analyzer;
+      cumulativeIntermediate.analyzer = analyzerData;
+      notify('analyzing', 'requirements_analysis_done', 30, 'Анализ требований восстановлен из контрольной точки', cumulativeIntermediate);
+    } else {
+      notify('analyzing', 'requirements_analysis', 15, 'Этап 1/4: Детальный анализ и категоризация требований (gpt-6.1-terra)...');
+      const analyzerTemplate = getPromptTemplate('requirements-analyzer');
 
-    const analyzerInput = customInstructions
-      ? `PRIMARY USER TASK:\n${rawPrompt}\n\nADDITIONAL MANDATORY SYSTEM INSTRUCTIONS & CONSTRAINTS (Crucial! Must extract as explicit requirements with high/critical priority):\n${customInstructions}`
-      : rawPrompt;
+      const analyzerInput = customInstructions
+        ? `PRIMARY USER TASK:\n${rawPrompt}\n\nADDITIONAL MANDATORY SYSTEM INSTRUCTIONS & CONSTRAINTS (Crucial! Must extract as explicit requirements with high/critical priority):\n${customInstructions}`
+        : rawPrompt;
 
-    const analyzerResult = await executeStructuredLLMCall<RequirementsAnalysis>(
-      {
-        stage: 'requirements_analyzer',
-        modelId: analyzerModel,
-        reasoningEffort,
-        systemPrompt: analyzerTemplate?.content || '',
-        userInput: analyzerInput,
-        zodSchema: RequirementsAnalysisSchema,
-      },
-      (raw) => RequirementsAnalysisSchema.parse(raw),
-      () => generateMockAnalyzerOutput(rawPrompt, targetEnvironment)
-    );
+      const analyzerResult = await executeStructuredLLMCall<RequirementsAnalysis>(
+        {
+          stage: 'requirements_analyzer',
+          modelId: analyzerModel,
+          reasoningEffort,
+          systemPrompt: analyzerTemplate?.content || '',
+          userInput: analyzerInput,
+          zodSchema: RequirementsAnalysisSchema,
+        },
+        (raw) => RequirementsAnalysisSchema.parse(raw),
+        () => generateMockAnalyzerOutput(rawPrompt, targetEnvironment)
+      );
 
-    recordMetrics(analyzerResult.metrics);
-    cumulativeIntermediate.analyzer = analyzerResult.data;
-    notify('analyzing', 'requirements_analysis_done', 30, 'Анализ требований завершен', cumulativeIntermediate);
+      recordMetrics(analyzerResult.metrics);
+      analyzerData = analyzerResult.data;
+      cumulativeIntermediate.analyzer = analyzerData;
+      notify('analyzing', 'requirements_analysis_done', 30, 'Анализ требований завершен', cumulativeIntermediate);
+    }
 
     if (isCancelled()) throw new Error('JOB_CANCELLED');
 
     // STAGE 2: SOLUTION ARCHITECT
-    notify('architecting', 'solution_architecture', 45, 'Этап 2/4: Архитектурное моделирование и инварианты (gpt-6.1-sol)...', cumulativeIntermediate);
-    const architectTemplate = getPromptTemplate('solution-architect');
+    let architectData: SolutionArchitecture;
+    if (options.resumeIntermediate?.architect) {
+      architectData = options.resumeIntermediate.architect;
+      cumulativeIntermediate.architect = architectData;
+      notify('architecting', 'solution_architecture_done', 60, 'Архитектурное решение восстановлено из контрольной точки', cumulativeIntermediate);
+    } else {
+      notify('architecting', 'solution_architecture', 45, 'Этап 2/4: Архитектурное моделирование и инварианты (gpt-6.1-sol)...', cumulativeIntermediate);
+      const architectTemplate = getPromptTemplate('solution-architect');
 
-    const architectInput = `Original Primary Request:\n${rawPrompt}\n\nMandatory System Instructions & Constraints:\n${customInstructions || 'None specified'}\n\nRequirements Analysis:\n${JSON.stringify(analyzerResult.data, null, 2)}`;
+      const architectInput = `Original Primary Request:\n${rawPrompt}\n\nMandatory System Instructions & Constraints:\n${customInstructions || 'None specified'}\n\nRequirements Analysis:\n${JSON.stringify(analyzerData, null, 2)}`;
 
-    const architectResult = await executeStructuredLLMCall<SolutionArchitecture>(
-      {
-        stage: 'solution_architect',
-        modelId: architectModel,
-        reasoningEffort,
-        systemPrompt: architectTemplate?.content || '',
-        userInput: architectInput,
-        zodSchema: SolutionArchitectureSchema,
-      },
-      (raw) => SolutionArchitectureSchema.parse(raw),
-      () => generateMockArchitectOutput(rawPrompt, analyzerResult.data)
-    );
+      const architectResult = await executeStructuredLLMCall<SolutionArchitecture>(
+        {
+          stage: 'solution_architect',
+          modelId: architectModel,
+          reasoningEffort,
+          systemPrompt: architectTemplate?.content || '',
+          userInput: architectInput,
+          zodSchema: SolutionArchitectureSchema,
+        },
+        (raw) => SolutionArchitectureSchema.parse(raw),
+        () => generateMockArchitectOutput(rawPrompt, analyzerData)
+      );
 
-    recordMetrics(architectResult.metrics);
-    cumulativeIntermediate.architect = architectResult.data;
-    notify('architecting', 'solution_architecture_done', 60, 'Архитектурное решение сформировано', cumulativeIntermediate);
+      recordMetrics(architectResult.metrics);
+      architectData = architectResult.data;
+      cumulativeIntermediate.architect = architectData;
+      notify('architecting', 'solution_architecture_done', 60, 'Архитектурное решение сформировано', cumulativeIntermediate);
+    }
 
     if (isCancelled()) throw new Error('JOB_CANCELLED');
 
@@ -267,11 +287,11 @@ export class PipelineOrchestrator {
     const composerSystem = `${composerTemplate?.content || ''}\n\n${targetTemplate?.content || ''}\nTarget Language: ${options.preferences?.targetLanguage || 'Russian'}\nDetail Level: ${options.preferences?.detailLevel || 'detailed'}`;
     
     // Synthesize structured input for the composer without unbounded JSON dumping
-    const reqSummary = analyzerResult.data.requirements
+    const reqSummary = analyzerData.requirements
       .map((r) => `- [${r.id}] ${r.title} (${r.category}, priority: ${r.priority}): ${r.description}`)
       .join('\n');
 
-    const decisionsSummary = architectResult.data.decisions
+    const decisionsSummary = architectData.decisions
       .map((d) => `- [${d.id}] ${d.title}: ${d.description} (Rationale: ${d.rationale}, Criteria: ${d.verificationCriteria})`)
       .join('\n');
 
@@ -281,41 +301,41 @@ ${rawPrompt}
 Additional Mandatory System Instructions & Constraints (CRUCIAL: MUST BE INTEGRATED IN FULL DETAIL INTO SYSTEM PROMPT AND USER PROMPT SPECIFICATION):
 ${customInstructions || 'None specified'}
 
-Verified Requirements (${analyzerResult.data.requirements.length} items):
+Verified Requirements (${analyzerData.requirements.length} items):
 ${reqSummary}
 
 Architectural Overview:
-${architectResult.data.architectureOverview}
+${architectData.architectureOverview}
 
 Key Architectural Decisions:
 ${decisionsSummary}
 
 Technology Stack:
-${architectResult.data.techStack.join(', ')}
+${architectData.techStack.join(', ')}
 
 Domain Entities & Models:
-${architectResult.data.keyEntities.join(', ')}
+${architectData.keyEntities.join(', ')}
 
 System Invariants:
-${architectResult.data.invariants.join('; ')}
+${architectData.invariants.join('; ')}
 
 Component Boundaries & Interfaces:
-${architectResult.data.componentBoundaries.join('; ')}
+${architectData.componentBoundaries.join('; ')}
 
 Storage & Persistence Strategy:
-${architectResult.data.dataStorageStrategy}
+${architectData.dataStorageStrategy}
 
 Fault Tolerance & Error Recovery:
-${architectResult.data.errorRecoveryStrategy}
+${architectData.errorRecoveryStrategy}
 
 Security & Access Control:
-${architectResult.data.securityRequirements.join('; ')}
+${architectData.securityRequirements.join('; ')}
 
 Verification & Test Scenarios:
-${architectResult.data.testScenarios.join('; ')}
+${architectData.testScenarios.join('; ')}
 
 Definition of Done:
-${architectResult.data.definitionOfDone.join('; ')}`;
+${architectData.definitionOfDone.join('; ')}`;
 
     const composerResult = await executeStructuredLLMCall<PromptPackage>(
       {
@@ -327,7 +347,7 @@ ${architectResult.data.definitionOfDone.join('; ')}`;
         zodSchema: PromptPackageSchema,
       },
       (raw) => PromptPackageSchema.parse(raw),
-      () => generateMockComposerOutput(rawPrompt, targetEnvironment, analyzerResult.data, architectResult.data)
+      () => generateMockComposerOutput(rawPrompt, targetEnvironment, analyzerData, architectData)
     );
 
     recordMetrics(composerResult.metrics);
@@ -346,7 +366,7 @@ ${rawPrompt}
 Additional Mandatory System Instructions & Constraints:
 ${customInstructions || 'None specified'}
 
-Requirements to verify (${analyzerResult.data.requirements.length} items):
+Requirements to verify (${analyzerData.requirements.length} items):
 ${reqSummary}
 
 Generated System Prompt:
@@ -365,7 +385,7 @@ ${composerResult.data.userPrompt}`;
         zodSchema: ReviewReportSchema,
       },
       (raw) => ReviewReportSchema.parse(raw),
-      () => generateMockReviewOutput(rawPrompt, analyzerResult.data, composerResult.data)
+      () => generateMockReviewOutput(rawPrompt, analyzerData, composerResult.data)
     );
 
     recordMetrics(reviewerResult.metrics);
@@ -388,7 +408,7 @@ ${composerResult.data.userPrompt}`;
 
     // Build verified final traceability matrix against the actual final userPrompt
     const finalTraceability = buildTraceabilityMatrix(
-      analyzerResult.data.requirements,
+      analyzerData.requirements,
       finalPrompts.userPrompt,
       reviewerResult.data.traceability
     );
@@ -436,8 +456,8 @@ ${composerResult.data.userPrompt}`;
       mode,
       actualModeUsed: 'quality',
       complexity,
-      analyzerResult: analyzerResult.data,
-      architectResult: architectResult.data,
+      analyzerResult: analyzerData,
+      architectResult: architectData,
       prompts: finalPrompts,
       reviewReport: finalReviewReport,
       stageMetrics,

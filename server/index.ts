@@ -396,6 +396,159 @@ app.post('/api/jobs/:id/cancel', async (req: Request, res: Response) => {
   res.json({ success: true, message: 'Отмена запрошена' });
 });
 
+app.post('/api/jobs/:id/retry', async (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  const storage = await getStorage();
+  const job = await storage.getJob(id);
+  if (!job) {
+    return res.status(404).json({ error: 'Задание не найдено' });
+  }
+
+  activeJobCancellations.delete(id);
+
+  const rawPrompt =
+    job.intermediateResults?.rawPrompt ||
+    (job.intermediateResults?.analyzer?.requirements?.map((r: any) => r.originalQuote).filter(Boolean).join('\n') ||
+      job.intermediateResults?.analyzer?.userGoal ||
+      '');
+  const preferences = job.intermediateResults?.preferences || {};
+
+  await storage.updateJob(id, {
+    status: 'queued',
+    currentStep: 'queued',
+    errorMessage: undefined,
+  });
+
+  broadcastJobEvent(id, {
+    jobId: id,
+    status: 'queued',
+    progressPercent: 10,
+    message: 'Перезапуск выполнения задания...',
+  });
+
+  const orchestrator = new PipelineOrchestrator();
+
+  (async () => {
+    try {
+      const result = await orchestrator.execute({
+        jobId: id,
+        rawPrompt,
+        targetEnvironment: job.targetEnvironment,
+        mode: job.generationMode,
+        preferences,
+        resumeIntermediate: {
+          analyzer: job.intermediateResults?.analyzer,
+          architect: job.intermediateResults?.architect,
+        },
+        checkCancelled: () => activeJobCancellations.has(id),
+        onProgress: async (event: JobProgressEvent) => {
+          const updateData: any = {
+            status: event.status,
+            currentStep: event.currentStep,
+            totalTokens: (job.totalTokens || 0) + (event.metrics?.totalTokens || 0),
+            totalCostUsd: (job.totalCostUsd || 0) + (event.metrics?.totalCostUsd || 0),
+          };
+          if (event.intermediateResults !== undefined) {
+            updateData.intermediateResults = {
+              ...event.intermediateResults,
+              rawPrompt,
+              preferences,
+            };
+          }
+          await storage.updateJob(id, updateData);
+          broadcastJobEvent(id, event);
+        },
+      });
+
+      if (job.projectId) {
+        const existingVersions = await storage.getVersionsForProject(job.projectId);
+        const versionNumber = existingVersions.length + 1;
+
+        await storage.createVersion({
+          projectId: job.projectId,
+          versionNumber,
+          rawPrompt,
+          targetEnvironment: job.targetEnvironment,
+          generationMode: job.generationMode,
+          settings: preferences,
+          systemPrompt: result.prompts.systemPrompt,
+          userPrompt: result.prompts.userPrompt,
+          whatImproved: result.prompts.whatImproved,
+          assumptions: result.prompts.assumptions,
+          unresolvedQuestions: result.prompts.unresolvedQuestions,
+          reviewReport: result.reviewReport,
+          requirements: result.analyzerResult,
+          architecturalDecisions: result.architectResult,
+          modelsUsed: result.stageMetrics.map((m) => m.modelId),
+          totalTokens: result.totalTokens + (job.totalTokens || 0),
+          totalCostUsd: (result.totalCostUsd || 0) + (job.totalCostUsd || 0),
+        });
+      }
+
+      const completedIntermediate = {
+        rawPrompt,
+        preferences,
+        analyzer: result.analyzerResult,
+        architect: result.architectResult,
+        composer: result.prompts,
+        reviewReport: result.reviewReport,
+        complexity: result.complexity,
+      };
+
+      await storage.updateJob(id, {
+        status: 'completed',
+        currentStep: 'done',
+        intermediateResults: completedIntermediate,
+        totalTokens: result.totalTokens + (job.totalTokens || 0),
+        totalCostUsd: (result.totalCostUsd || 0) + (job.totalCostUsd || 0),
+      });
+
+      for (const m of result.stageMetrics) {
+        await storage.recordMetric({ ...m, jobId: id });
+      }
+
+      broadcastJobEvent(id, {
+        jobId: id,
+        status: 'completed',
+        currentStep: 'done',
+        progressPercent: 100,
+        message: 'Генерация успешно завершена!',
+        intermediateResults: completedIntermediate,
+        metrics: {
+          totalTokens: result.totalTokens + (job.totalTokens || 0),
+          totalCostUsd: (result.totalCostUsd || 0) + (job.totalCostUsd || 0),
+        },
+      });
+    } catch (err: any) {
+      if (err.message === 'JOB_CANCELLED' || activeJobCancellations.has(id)) {
+        await storage.updateJob(id, { status: 'cancelled' });
+        broadcastJobEvent(id, {
+          jobId: id,
+          status: 'cancelled',
+          progressPercent: 100,
+          message: 'Генерация отменена пользователем',
+        });
+      } else {
+        await storage.updateJob(id, {
+          status: 'failed',
+          errorMessage: err.message || 'Unknown generation error',
+        });
+        broadcastJobEvent(id, {
+          jobId: id,
+          status: 'failed',
+          progressPercent: 100,
+          message: `Ошибка выполнения: ${err.message}`,
+          error: err.message,
+        });
+      }
+    } finally {
+      activeJobCancellations.delete(id);
+    }
+  })();
+
+  res.json({ success: true, message: 'Генерация возобновлена' });
+});
+
 // -------------------------------------------------------------
 // Projects & Versions Endpoints
 // -------------------------------------------------------------

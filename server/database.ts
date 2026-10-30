@@ -300,9 +300,9 @@ export class PostgresStorage implements IDatabaseStorage {
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
 
-        -- Recovery policy: mark stale unfinished jobs as failed upon startup
+        -- Recovery policy: mark stale unfinished jobs as interrupted upon startup
         UPDATE generation_jobs
-        SET status = 'failed', error_message = 'Job terminated due to server restart recovery policy'
+        SET status = 'failed', error_message = 'Генерация была прервана из-за планового перезапуска сервера во время обновления. Нажмите «Повторить генерацию», чтобы завершить создание ТЗ.'
         WHERE status IN ('queued', 'analyzing', 'architecting', 'composing', 'reviewing');
       `);
 

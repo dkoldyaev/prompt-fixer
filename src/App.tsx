@@ -504,6 +504,34 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleRetryJob = async () => {
+    if (!activeJobId) return;
+    setIsExecuting(true);
+    setExecutionEvent({
+      jobId: activeJobId,
+      status: 'queued',
+      progressPercent: 10,
+      message: 'Перезапуск выполнения задания...',
+    });
+    try {
+      const res = await fetch(`/api/jobs/${activeJobId}/retry`, { method: 'POST' });
+      if (res.ok) {
+        attachToJobEvents(activeJobId, currentProject?.id);
+      } else {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to retry job');
+      }
+    } catch (err: any) {
+      setExecutionEvent({
+        jobId: activeJobId,
+        status: 'failed',
+        progressPercent: 100,
+        message: err.message,
+        error: err.message,
+      });
+    }
+  };
+
   const handleApplyRevision = async (instruction: string) => {
     if (!currentProject) return;
     setIsRevising(true);
@@ -851,6 +879,7 @@ export const App: React.FC = () => {
         jobId={activeJobId}
         onCancel={handleCancelJob}
         onClose={() => setIsExecuting(false)}
+        onRetry={handleRetryJob}
       />
     </div>
   );
