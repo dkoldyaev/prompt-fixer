@@ -9,12 +9,17 @@ import {
   Cpu,
   Layers,
   Coins,
+  Link2,
+  Copy,
+  Check,
+  X,
 } from 'lucide-react';
 import { JobProgressEvent, JobStatus } from '../../packages/shared/types';
 
 interface ExecutionModalProps {
   isOpen: boolean;
   event: JobProgressEvent | null;
+  jobId?: string | null;
   onCancel: () => void;
   onClose?: () => void;
 }
@@ -22,12 +27,25 @@ interface ExecutionModalProps {
 export const ExecutionModal: React.FC<ExecutionModalProps> = ({
   isOpen,
   event,
+  jobId,
   onCancel,
   onClose,
 }) => {
   const [activePreviewTab, setActivePreviewTab] = useState<'analyzer' | 'architect' | 'prompts'>('analyzer');
+  const [copiedLink, setCopiedLink] = useState(false);
 
   if (!isOpen || !event) return null;
+
+  const currentJobId = jobId || (event.jobId !== 'init' && event.jobId !== 'error' ? event.jobId : null);
+  const shareUrl = currentJobId ? `${window.location.origin}/jobs/${currentJobId}` : null;
+
+  const handleCopyLink = () => {
+    if (shareUrl) {
+      navigator.clipboard.writeText(shareUrl);
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 2000);
+    }
+  };
 
   const isFast = event.intermediateResults?.complexity?.recommendedMode === 'fast';
 
@@ -98,7 +116,53 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
               </div>
               <p className="text-[10px] text-slate-400">{event.metrics?.totalTokens || 0} токенов</p>
             </div>
+
+            {onClose && (
+              <button
+                onClick={onClose}
+                className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700/60 rounded-lg transition-colors"
+                title="Свернуть окно"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            )}
           </div>
+        </div>
+
+        {/* Unique Link & Resumption Banner */}
+        {shareUrl && (
+          <div className="mx-6 mt-4 p-3 bg-slate-950/80 border border-indigo-500/30 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs shadow-inner">
+            <div className="flex items-center gap-2.5 overflow-hidden flex-1 min-w-0">
+              <div className="p-1.5 rounded-lg bg-indigo-500/10 text-indigo-400 shrink-0">
+                <Link2 className="w-4 h-4" />
+              </div>
+              <div className="truncate">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-slate-300 font-semibold">Уникальная ссылка на генерацию:</span>
+                  <span className="text-[10px] uppercase font-bold px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300">
+                    Permalink
+                  </span>
+                </div>
+                <p className="text-indigo-300 font-mono text-[11px] truncate mt-0.5 select-all">
+                  {shareUrl}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto justify-end">
+              <button
+                onClick={handleCopyLink}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 rounded-lg font-medium text-xs transition-colors shadow-sm"
+              >
+                {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedLink ? 'Скопировано!' : 'Копировать'}</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="px-6 pt-2 pb-1 text-[11px] text-slate-400 flex items-center justify-between">
+          <span>💡 Вы можете закрыть страницу прямо сейчас — процесс продолжится на сервере, а результат будет доступен по ссылке выше.</span>
         </div>
 
         {/* Progress Bar */}
@@ -253,12 +317,23 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
 
           <div className="flex items-center gap-2">
             {event.status !== 'completed' && event.status !== 'failed' && event.status !== 'cancelled' && (
-              <button
-                onClick={onCancel}
-                className="px-4 py-2 bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/30 rounded-xl text-xs font-semibold transition-colors"
-              >
-                Отменить генерацию
-              </button>
+              <>
+                {onClose && (
+                  <button
+                    onClick={onClose}
+                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold transition-colors"
+                    title="Свернуть окно и продолжить работу. Генерация не прервётся"
+                  >
+                    Свернуть в фон
+                  </button>
+                )}
+                <button
+                  onClick={onCancel}
+                  className="px-4 py-2 bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/30 rounded-xl text-xs font-semibold transition-colors"
+                >
+                  Отменить генерацию
+                </button>
+              </>
             )}
 
             {(event.status === 'completed' || event.status === 'failed' || event.status === 'cancelled') && (

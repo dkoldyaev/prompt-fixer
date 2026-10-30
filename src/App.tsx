@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Loader2, Link2, Copy, Check, Sparkles } from 'lucide-react';
 import { Navbar, ActiveTab } from './components/Navbar';
 import { PromptCreator } from './components/PromptCreator';
 import { ExecutionModal } from './components/ExecutionModal';
@@ -25,6 +26,9 @@ export const App: React.FC = () => {
   const [projectsList, setProjectsList] = useState<any[]>([]);
   const [templatesList, setTemplatesList] = useState<PromptTemplateDefinition[]>([]);
   const [isRevising, setIsRevising] = useState<boolean>(false);
+  const [copiedFloatingLink, setCopiedFloatingLink] = useState(false);
+
+  const eventSourceRef = useRef<EventSource | null>(null);
 
   // Load projects and templates on mount
   const loadProjects = async () => {
@@ -51,10 +55,238 @@ export const App: React.FC = () => {
     }
   };
 
+  // Re-attach or start listening to SSE events for a specific job
+  const attachToJobEvents = useCallback((jobId: string, projectId?: string) => {
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+
+    const eventSource = new EventSource(`/api/jobs/${jobId}/events`);
+    eventSourceRef.current = eventSource;
+
+    eventSource.onmessage = async (e) => {
+      try {
+        const progress: JobProgressEvent = JSON.parse(e.data);
+        setExecutionEvent(progress);
+
+        if (progress.status === 'completed' || progress.status === 'failed' || progress.status === 'cancelled') {
+          eventSource.close();
+          eventSourceRef.current = null;
+
+          if (progress.status === 'completed') {
+            const targetProjId = projectId || currentProject?.id;
+            if (targetProjId) {
+              const pRes = await fetch(`/api/projects/${targetProjId}`);
+              if (pRes.ok) {
+                const pData = await pRes.json();
+                setCurrentProject(pData.project);
+                setProjectVersions(pData.versions);
+                setActiveVersionIndex(Math.max(0, pData.versions.length - 1));
+              }
+            }
+            loadProjects();
+            setIsExecuting(false);
+          }
+        }
+      } catch (parseErr) {
+        console.warn('Failed to parse SSE event:', parseErr);
+      }
+    };
+
+    eventSource.onerror = () => {
+      eventSource.close();
+      eventSourceRef.current = null;
+    };
+  }, [currentProject?.id]);
+
+  // Load a job by unique ID (allows resuming from URL or bookmark)
+  const loadJobById = useCallback(async (jobId: string) => {
+    try {
+      const res = await fetch(`/api/jobs/${jobId}`);
+      if (!res.ok) {
+        console.warn(`Job ${jobId} not found`);
+        window.history.replaceState(null, '', '/');
+        return;
+      }
+
+      const job = await res.json();
+      setActiveJobId(job.id);
+
+      // If job is already completed
+      if (job.status === 'completed') {
+        if (job.projectId) {
+          const pRes = await fetch(`/api/projects/${job.projectId}`);
+          if (pRes.ok) {
+            const pData = await pRes.json();
+            setCurrentProject(pData.project);
+            setProjectVersions(pData.versions);
+            setActiveVersionIndex(Math.max(0, pData.versions.length - 1));
+            setActiveTab('create');
+            setIsExecuting(false);
+            return;
+          }
+        }
+      }
+
+      // If job is in progress
+      if (['queued', 'analyzing', 'architecting', 'composing', 'reviewing'].includes(job.status)) {
+        if (job.projectId) {
+          const pRes = await fetch(`/api/projects/${job.projectId}`);
+          if (pRes.ok) {
+            const pData = await pRes.json();
+            setCurrentProject(pData.project);
+            setProjectVersions(pData.versions);
+          }
+        }
+
+        const percentMap: Record<string, number> = {
+          queued: 5,
+          analyzing: 25,
+          architecting: 50,
+          composing: 75,
+          reviewing: 90,
+        };
+
+        setExecutionEvent({
+          jobId: job.id,
+          status: job.status,
+          currentStep: job.currentStep,
+          progressPercent: percentMap[job.status] || 50,
+          message: `Возобновлено отслеживание генерации (${job.status})...`,
+          intermediateResults: job.intermediateResults,
+          metrics: {
+            totalTokens: job.totalTokens,
+            totalCostUsd: job.totalCostUsd,
+          },
+        });
+
+        setIsExecuting(true);
+        setActiveTab('create');
+        attachToJobEvents(job.id, job.projectId);
+        return;
+      }
+
+      // If job failed or cancelled
+      if (job.status === 'failed' || job.status === 'cancelled') {
+        if (job.projectId) {
+          const pRes = await fetch(`/api/projects/${job.projectId}`);
+          if (pRes.ok) {
+            const pData = await pRes.json();
+            setCurrentProject(pData.project);
+            setProjectVersions(pData.versions);
+          }
+        }
+
+        setExecutionEvent({
+          jobId: job.id,
+          status: job.status,
+          currentStep: job.currentStep,
+          progressPercent: 100,
+          message: job.errorMessage || `Статус задания: ${job.status}`,
+          error: job.errorMessage,
+        });
+        setIsExecuting(true);
+        setActiveTab('create');
+      }
+    } catch (err) {
+      console.error('Failed to load job by ID:', err);
+    }
+  }, [attachToJobEvents]);
+
+  // Load a project by ID
+  const handleSelectProject = useCallback(async (projectId: string, updateUrl = true) => {
+    try {
+      const res = await fetch(`/api/projects/${projectId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setCurrentProject(data.project);
+        setProjectVersions(data.versions);
+        setActiveVersionIndex(Math.max(0, data.versions.length - 1));
+        setActiveTab('create');
+        if (updateUrl) {
+          window.history.pushState(null, '', `/projects/${projectId}`);
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to load project:', err);
+    }
+  }, []);
+
+  // Handle URL routes (/jobs/:id, /projects/:id, /history, /templates, /settings)
+  const handleUrlRouting = useCallback(async () => {
+    const path = window.location.pathname;
+    const searchParams = new URLSearchParams(window.location.search);
+    const jobParam = searchParams.get('job') || searchParams.get('jobId');
+    const projectParam = searchParams.get('project') || searchParams.get('projectId');
+
+    const jobMatch = path.match(/^\/jobs\/([a-zA-Z0-9_-]+)/);
+    const targetJobId = jobMatch ? jobMatch[1] : jobParam;
+
+    const projectMatch = path.match(/^\/projects\/([a-zA-Z0-9_-]+)/);
+    const targetProjectId = projectMatch ? projectMatch[1] : projectParam;
+
+    if (targetJobId) {
+      await loadJobById(targetJobId);
+      return;
+    }
+
+    if (targetProjectId) {
+      await handleSelectProject(targetProjectId, false);
+      return;
+    }
+
+    if (path === '/history') {
+      setActiveTab('history');
+      return;
+    }
+    if (path === '/templates') {
+      setActiveTab('templates');
+      return;
+    }
+    if (path === '/settings') {
+      setActiveTab('settings');
+      return;
+    }
+
+    // Default: root path
+    if (path === '/') {
+      setActiveTab('create');
+    }
+  }, [loadJobById, handleSelectProject]);
+
   useEffect(() => {
     loadProjects();
     loadTemplates();
-  }, []);
+    handleUrlRouting();
+
+    const handlePopState = () => {
+      handleUrlRouting();
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+      }
+    };
+  }, [handleUrlRouting]);
+
+  // Tab navigation with URL updates
+  const handleSelectTab = (tab: ActiveTab) => {
+    setActiveTab(tab);
+    if (tab === 'create') {
+      if (activeJobId && isBackgroundRunning) {
+        window.history.pushState(null, '', `/jobs/${activeJobId}`);
+      } else if (currentProject) {
+        window.history.pushState(null, '', `/projects/${currentProject.id}`);
+      } else {
+        window.history.pushState(null, '', '/');
+      }
+    } else {
+      window.history.pushState(null, '', `/${tab}`);
+    }
+  };
 
   // Handle Prompt Generation Trigger
   const handleGenerate = async (params: {
@@ -116,37 +348,11 @@ export const App: React.FC = () => {
       const { jobId } = await jobRes.json();
       setActiveJobId(jobId);
 
+      // Immediately set unique URL for this generation
+      window.history.pushState(null, '', `/jobs/${jobId}`);
+
       // 3. Connect to SSE Stream
-      const eventSource = new EventSource(`/api/jobs/${jobId}/events`);
-
-      eventSource.onmessage = async (e) => {
-        try {
-          const progress: JobProgressEvent = JSON.parse(e.data);
-          setExecutionEvent(progress);
-
-          if (progress.status === 'completed' || progress.status === 'failed' || progress.status === 'cancelled') {
-            eventSource.close();
-
-            if (progress.status === 'completed' && projectId) {
-              // Reload project versions
-              const pRes = await fetch(`/api/projects/${projectId}`);
-              if (pRes.ok) {
-                const pData = await pRes.json();
-                setCurrentProject(pData.project);
-                setProjectVersions(pData.versions);
-                setActiveVersionIndex(pData.versions.length - 1);
-              }
-              loadProjects();
-            }
-          }
-        } catch (parseErr) {
-          console.warn('Failed to parse SSE event:', parseErr);
-        }
-      };
-
-      eventSource.onerror = () => {
-        eventSource.close();
-      };
+      attachToJobEvents(jobId, projectId);
     } catch (err: any) {
       setExecutionEvent({
         jobId: 'error',
@@ -179,27 +385,12 @@ export const App: React.FC = () => {
         if (pRes.ok) {
           const pData = await pRes.json();
           setProjectVersions(pData.versions);
-          setActiveVersionIndex(pData.versions.length - 1);
+          setActiveVersionIndex(Math.max(0, pData.versions.length - 1));
         }
         loadProjects();
       }
     } finally {
       setIsRevising(false);
-    }
-  };
-
-  const handleSelectProject = async (projectId: string) => {
-    try {
-      const res = await fetch(`/api/projects/${projectId}`);
-      if (res.ok) {
-        const data = await res.json();
-        setCurrentProject(data.project);
-        setProjectVersions(data.versions);
-        setActiveVersionIndex(data.versions.length - 1);
-        setActiveTab('create');
-      }
-    } catch (err) {
-      console.warn('Failed to load project:', err);
     }
   };
 
@@ -209,6 +400,7 @@ export const App: React.FC = () => {
       if (currentProject?.id === projectId) {
         setCurrentProject(null);
         setProjectVersions([]);
+        window.history.pushState(null, '', '/');
       }
       loadProjects();
     }
@@ -232,6 +424,19 @@ export const App: React.FC = () => {
     loadTemplates();
   };
 
+  const handleNewPrompt = () => {
+    setCurrentProject(null);
+    setProjectVersions([]);
+    setActiveJobId(null);
+    window.history.pushState(null, '', '/');
+  };
+
+  const isBackgroundRunning =
+    executionEvent !== null &&
+    executionEvent.status !== 'completed' &&
+    executionEvent.status !== 'failed' &&
+    executionEvent.status !== 'cancelled';
+
   const activeVersion = projectVersions[activeVersionIndex];
   const previousVersion = activeVersionIndex > 0 ? projectVersions[activeVersionIndex - 1] : undefined;
 
@@ -240,7 +445,7 @@ export const App: React.FC = () => {
       {/* Top Navbar */}
       <Navbar
         activeTab={activeTab}
-        onSelectTab={setActiveTab}
+        onSelectTab={handleSelectTab}
         activeProjectTitle={currentProject?.title}
         versionNumber={activeVersion?.versionNumber}
       />
@@ -261,10 +466,7 @@ export const App: React.FC = () => {
                     </p>
                   </div>
                   <button
-                    onClick={() => {
-                      setCurrentProject(null);
-                      setProjectVersions([]);
-                    }}
+                    onClick={handleNewPrompt}
                     className="px-4 py-2 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 rounded-xl text-xs font-semibold transition-colors"
                   >
                     + Новый промпт
@@ -327,10 +529,48 @@ export const App: React.FC = () => {
         {activeTab === 'settings' && <SettingsView />}
       </main>
 
+      {/* Floating Widget When Generation Runs In Background (Modal closed by user) */}
+      {activeJobId && isBackgroundRunning && !isExecuting && (
+        <div className="fixed bottom-6 right-6 z-40 bg-slate-900/95 border border-indigo-500/50 backdrop-blur-md shadow-2xl rounded-2xl p-4 flex items-center gap-4 animate-fade-in max-w-md">
+          <div className="relative">
+            <Loader2 className="w-6 h-6 text-indigo-400 animate-spin" />
+            <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-indigo-500 rounded-full animate-ping" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-bold text-white truncate">Генерация выполняется в фоне</p>
+              <span className="text-[11px] text-indigo-400 font-bold">{executionEvent?.progressPercent || 0}%</span>
+            </div>
+            <p className="text-[11px] text-slate-400 truncate mt-0.5">{executionEvent?.message || 'Поэтапная оркестрация...'}</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setIsExecuting(true)}
+              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/20 transition-all"
+            >
+              Открыть
+            </button>
+            <button
+              onClick={() => {
+                const url = `${window.location.origin}/jobs/${activeJobId}`;
+                navigator.clipboard.writeText(url);
+                setCopiedFloatingLink(true);
+                setTimeout(() => setCopiedFloatingLink(false), 2000);
+              }}
+              className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs border border-slate-700 transition-colors"
+              title="Скопировать ссылку на генерацию"
+            >
+              {copiedFloatingLink ? <Check className="w-4 h-4 text-emerald-400" /> : <Link2 className="w-4 h-4 text-indigo-400" />}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Execution Progress Modal */}
       <ExecutionModal
         isOpen={isExecuting}
         event={executionEvent}
+        jobId={activeJobId}
         onCancel={handleCancelJob}
         onClose={() => setIsExecuting(false)}
       />

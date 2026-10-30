@@ -17,6 +17,7 @@ import {
   FileText,
   AlertTriangle,
   ArrowRight,
+  Link2,
 } from 'lucide-react';
 import { VersionEntity } from '../../server/database';
 import { DiffViewer } from './DiffViewer';
@@ -46,6 +47,16 @@ export const ResultView: React.FC<ResultViewProps> = ({
   const [editableSystemPrompt, setEditableSystemPrompt] = useState<string>(version.systemPrompt);
   const [showDiff, setShowDiff] = useState<boolean>(false);
   const [revisionInput, setRevisionInput] = useState<string>('');
+  const [copiedLink, setCopiedLink] = useState<boolean>(false);
+
+  const handleCopyShareUrl = () => {
+    const url = version.projectId
+      ? `${window.location.origin}/projects/${version.projectId}`
+      : window.location.href;
+    navigator.clipboard.writeText(url);
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 2000);
+  };
 
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
@@ -156,6 +167,15 @@ export const ResultView: React.FC<ResultViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={handleCopyShareUrl}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-300 font-medium border border-indigo-500/30 transition-colors shadow-sm"
+            title="Скопировать постоянную ссылку на этот результат"
+          >
+            {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Link2 className="w-3.5 h-3.5 text-indigo-400" />}
+            <span>{copiedLink ? 'Ссылка скопирована!' : 'Ссылка на спецификацию'}</span>
+          </button>
+
           <button
             onClick={handleDownloadMarkdown}
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-colors"

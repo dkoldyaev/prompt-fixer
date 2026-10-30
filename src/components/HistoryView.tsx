@@ -10,6 +10,8 @@ import {
   FolderOpen,
   ArrowRight,
   GitBranch,
+  Link2,
+  Check,
 } from 'lucide-react';
 import { ProjectEntity, VersionEntity } from '../../server/database';
 
@@ -41,6 +43,15 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
+  const [copiedProjectId, setCopiedProjectId] = useState<string | null>(null);
+
+  const handleCopyProjectLink = (projectId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const url = `${window.location.origin}/projects/${projectId}`;
+    navigator.clipboard.writeText(url);
+    setCopiedProjectId(projectId);
+    setTimeout(() => setCopiedProjectId(null), 2000);
+  };
 
   const filteredProjects = projects.filter((p) =>
     p.title.toLowerCase().includes(searchQuery.toLowerCase())
@@ -160,13 +171,33 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                   {new Date(p.updatedAt).toLocaleDateString('ru-RU')}
                 </span>
 
-                <button
-                  onClick={() => onSelectProject(p.id)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600/10 hover:bg-indigo-600 text-indigo-400 hover:text-white font-medium transition-all"
-                >
-                  <FolderOpen className="w-3.5 h-3.5" />
-                  <span>Открыть</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={(e) => handleCopyProjectLink(p.id, e)}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-medium text-xs border border-slate-700/80 transition-all"
+                    title="Скопировать постоянную ссылку на проект"
+                  >
+                    {copiedProjectId === p.id ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        <span className="text-emerald-400">Скопировано</span>
+                      </>
+                    ) : (
+                      <>
+                        <Link2 className="w-3.5 h-3.5 text-indigo-400" />
+                        <span>Ссылка</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    onClick={() => onSelectProject(p.id)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600/10 hover:bg-indigo-600 text-indigo-400 hover:text-white font-medium transition-all"
+                  >
+                    <FolderOpen className="w-3.5 h-3.5" />
+                    <span>Открыть</span>
+                  </button>
+                </div>
               </div>
             </div>
           ))}
