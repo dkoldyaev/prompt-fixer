@@ -23,6 +23,7 @@ export const ConfigSchema = z.object({
   OPENAI_COMPOSER_MODEL: z.string().min(1, 'OPENAI_COMPOSER_MODEL is required'),
   OPENAI_REVIEWER_MODEL: z.string().min(1, 'OPENAI_REVIEWER_MODEL is required'),
   OPENAI_FAST_MODEL: z.string().min(1, 'OPENAI_FAST_MODEL is required'),
+  AI_REASONING_MODELS: z.string().min(1, 'AI_REASONING_MODELS is required'),
   AI_MAX_OUTPUT_TOKENS: z
     .string()
     .min(1, 'AI_MAX_OUTPUT_TOKENS is required')

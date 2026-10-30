@@ -12,6 +12,7 @@ describe('Strict Configuration Module (No-Fallback Policy)', () => {
     OPENAI_COMPOSER_MODEL: 'gpt-4o',
     OPENAI_REVIEWER_MODEL: 'gpt-4o',
     OPENAI_FAST_MODEL: 'gpt-4o-mini',
+    AI_REASONING_MODELS: 'gpt-6.1-sol,gpt-6.1-terra',
     AI_MAX_OUTPUT_TOKENS: '4096',
     AI_RETRY_LIMIT: '3',
     AI_REQUEST_TIMEOUT_MS: '60000',

@@ -18,20 +18,28 @@ import {
 import { calculateTokenCost } from '../shared/pricing';
 import { buildTraceabilityMatrix } from './traceabilityEngine';
 
+const HTTP_TIMEOUT_MS = 900_000;
+
 export interface LLMCallParams {
   stage: string;
   modelId: string;
   systemPrompt: string;
   userInput: string;
-  zodSchema?: z.ZodTypeAny;
+  zodSchema: z.ZodTypeAny;
   reasoningEffort?: 'low' | 'medium' | 'high';
 }
 
 /**
- * Checks whether a given model supports reasoning effort parameter.
+ * Checks whether a given model supports reasoning effort parameter
+ * based on the models configured in .env (AI_REASONING_MODELS).
  */
 export function isReasoningModel(modelId: string): boolean {
-  return /^(gpt-6|gpt-5\.6|o1|o3)/i.test(modelId);
+  const config = getConfig();
+  const reasoningList = config.AI_REASONING_MODELS
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  return reasoningList.includes(modelId.trim().toLowerCase());
 }
 
 export interface LLMCallResult<T> {
@@ -95,8 +103,8 @@ export async function executeStructuredLLMCall<T>(
 
   // Real OpenAI invocation with retry and backoff
   const undiciAgent = new Agent({
-    headersTimeout: Math.max(config.AI_REQUEST_TIMEOUT_MS * 2, 900000),
-    bodyTimeout: Math.max(config.AI_REQUEST_TIMEOUT_MS * 2, 900000),
+    headersTimeout: HTTP_TIMEOUT_MS,
+    bodyTimeout: HTTP_TIMEOUT_MS,
     connectTimeout: 60000,
   });
 
@@ -115,9 +123,8 @@ export async function executeStructuredLLMCall<T>(
   while (attempts <= maxRetries) {
     attempts++;
     try {
-      const responseFormat = params.zodSchema
-        ? zodResponseFormat(params.zodSchema, params.stage.replace(/[^a-zA-Z0-9_]/g, '_'))
-        : { type: 'json_object' as const };
+      const cleanStageName = params.stage.replace(/[^a-zA-Z0-9_]/g, '_');
+      const responseFormat = zodResponseFormat(params.zodSchema, cleanStageName);
 
       const isReasoning = isReasoningModel(params.modelId);
       const requestPayload: any = {
@@ -125,7 +132,7 @@ export async function executeStructuredLLMCall<T>(
         messages: [
           {
             role: 'system',
-            content: `${params.systemPrompt}\n\nIMPORTANT: You MUST respond strictly in valid JSON format matching the schema specification.`,
+            content: params.systemPrompt,
           },
           {
             role: 'user',

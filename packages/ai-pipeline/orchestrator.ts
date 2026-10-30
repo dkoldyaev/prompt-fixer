@@ -467,15 +467,16 @@ ${composerResult.data.userPrompt}`;
 
     const inputData = `Current System Prompt:\n${params.currentSystemPrompt}\n\nCurrent User Prompt (ТЗ):\n${params.currentUserPrompt}\n\nNew User Instruction/Amendment:\n${params.amendmentInstruction}`;
 
-    const revisionResult = await executeStructuredLLMCall(
+    const revisionResult = await executeStructuredLLMCall<PromptPackage>(
       {
         stage: 'prompt_revision',
         modelId: config.OPENAI_COMPOSER_MODEL,
         reasoningEffort: 'medium',
         systemPrompt: revisionTemplate?.content || '',
         userInput: inputData,
+        zodSchema: PromptPackageSchema,
       },
-      (raw: any) => raw,
+      (raw: any) => PromptPackageSchema.parse(raw),
       () => {
         // Surgical modification: integrate user amendment instruction
         let updatedUser = params.currentUserPrompt;
