@@ -104,6 +104,9 @@ export async function executeStructuredLLMCall<T>(
     apiKey: config.OPENAI_API_KEY,
     timeout: config.AI_REQUEST_TIMEOUT_MS,
     httpAgent: undiciAgent,
+    fetchOptions: {
+      dispatcher: undiciAgent,
+    } as any,
   });
 
   const maxRetries = config.AI_RETRY_LIMIT;
