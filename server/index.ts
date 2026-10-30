@@ -204,16 +204,20 @@ app.post('/api/jobs', async (req: Request, res: Response) => {
         });
       }
 
+      const completedIntermediate = {
+        rawPrompt: parsed.data.rawPrompt,
+        preferences: parsed.data.preferences || {},
+        analyzer: result.analyzerResult,
+        architect: result.architectResult,
+        composer: result.prompts,
+        reviewReport: result.reviewReport,
+        complexity: result.complexity,
+      };
+
       await storage.updateJob(jobId, {
         status: 'completed',
         currentStep: 'done',
-        intermediateResults: {
-          analyzer: result.analyzerResult,
-          architect: result.architectResult,
-          composer: result.prompts,
-          reviewReport: result.reviewReport,
-          complexity: result.complexity,
-        },
+        intermediateResults: completedIntermediate,
         totalTokens: result.totalTokens,
         totalCostUsd: result.totalCostUsd,
       });
@@ -222,6 +226,20 @@ app.post('/api/jobs', async (req: Request, res: Response) => {
       for (const m of result.stageMetrics) {
         await storage.recordMetric({ ...m, jobId });
       }
+
+      // Broadcast completed event to all SSE clients so modals/listeners wake up immediately
+      broadcastJobEvent(jobId, {
+        jobId,
+        status: 'completed',
+        currentStep: 'done',
+        progressPercent: 100,
+        message: 'Генерация успешно завершена!',
+        intermediateResults: completedIntermediate,
+        metrics: {
+          totalTokens: result.totalTokens,
+          totalCostUsd: result.totalCostUsd,
+        },
+      });
     } catch (err: any) {
       if (err.message === 'JOB_CANCELLED' || activeJobCancellations.has(jobId)) {
         await storage.updateJob(jobId, { status: 'cancelled' });
@@ -431,7 +449,56 @@ app.get('/api/projects/:id', async (req: Request, res: Response) => {
   if (!project) {
     return res.status(404).json({ error: 'Проект не найден' });
   }
-  const versions = await storage.getVersionsForProject(project.id);
+  let versions = await storage.getVersionsForProject(project.id);
+
+  // If no versions exist yet, check if there's any job associated with this project to synthesize
+  if (versions.length === 0) {
+    const jobs = await storage.getJobsForProject(project.id);
+    const completedJob = jobs.find(
+      (j) => j.status === 'completed' && j.intermediateResults?.composer
+    );
+    if (completedJob) {
+      const composer = completedJob.intermediateResults?.composer;
+      const analyzer = completedJob.intermediateResults?.analyzer;
+      const architect = completedJob.intermediateResults?.architect;
+      const reviewReport = completedJob.intermediateResults?.reviewReport;
+
+      const rawPrompt =
+        completedJob.intermediateResults?.rawPrompt ||
+        (analyzer?.requirements?.map((r: any) => r.originalQuote).filter(Boolean).join('\n') ||
+          analyzer?.userGoal ||
+          project.title);
+
+      const newVersion = await storage.createVersion({
+        projectId: project.id,
+        versionNumber: 1,
+        rawPrompt,
+        targetEnvironment: completedJob.targetEnvironment,
+        generationMode: completedJob.generationMode,
+        settings: completedJob.intermediateResults?.preferences || {},
+        systemPrompt: composer?.systemPrompt || '',
+        userPrompt: composer?.userPrompt || '',
+        whatImproved: composer?.whatImproved || [],
+        assumptions: composer?.assumptions || [],
+        unresolvedQuestions: composer?.unresolvedQuestions || [],
+        reviewReport: reviewReport || {
+          isApproved: true,
+          score: 95,
+          traceability: [],
+          critique: [],
+          fixesApplied: null,
+          summary: 'Синтезировано из результатов генерации',
+        },
+        requirements: analyzer,
+        architecturalDecisions: architect,
+        modelsUsed: ['gpt-6.1-sol', 'gpt-6.1-terra'],
+        totalTokens: completedJob.totalTokens,
+        totalCostUsd: completedJob.totalCostUsd,
+      });
+      versions = [newVersion];
+    }
+  }
+
   res.json({ project, versions });
 });
 

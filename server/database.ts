@@ -71,6 +71,7 @@ export interface IDatabaseStorage {
 
   createJob(data: Omit<JobEntity, 'createdAt' | 'updatedAt'>): Promise<JobEntity>;
   getJob(id: string): Promise<JobEntity | null>;
+  getJobsForProject(projectId: string): Promise<JobEntity[]>;
   updateJob(id: string, updates: Partial<JobEntity>): Promise<JobEntity | null>;
   requestJobCancel(id: string): Promise<boolean>;
 
@@ -166,6 +167,10 @@ export class InMemoryStorage implements IDatabaseStorage {
 
   async getJob(id: string): Promise<JobEntity | null> {
     return this.jobs.get(id) || null;
+  }
+
+  async getJobsForProject(projectId: string): Promise<JobEntity[]> {
+    return Array.from(this.jobs.values()).filter((j) => j.projectId === projectId);
   }
 
   async updateJob(id: string, updates: Partial<JobEntity>): Promise<JobEntity | null> {
@@ -527,6 +532,28 @@ export class PostgresStorage implements IDatabaseStorage {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
+  }
+
+  async getJobsForProject(projectId: string): Promise<JobEntity[]> {
+    const res = await this.pool.query(
+      `SELECT * FROM generation_jobs WHERE project_id = $1 ORDER BY created_at DESC`,
+      [projectId]
+    );
+    return res.rows.map((row) => ({
+      id: row.id,
+      projectId: row.project_id,
+      targetEnvironment: row.target_environment,
+      generationMode: row.generation_mode,
+      status: row.status,
+      currentStep: row.current_step,
+      intermediateResults: row.intermediate_results,
+      errorMessage: row.error_message,
+      totalTokens: row.total_tokens,
+      totalCostUsd: row.total_cost_usd ? parseFloat(row.total_cost_usd) : null,
+      cancelRequested: row.cancel_requested,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
   }
 
   async updateJob(id: string, updates: Partial<JobEntity>): Promise<JobEntity | null> {

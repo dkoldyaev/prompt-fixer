@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Loader2, Link2, Copy, Check, Sparkles } from 'lucide-react';
+import { Loader2, Link2, Copy, Check, Sparkles, CheckSquare, FileText, AlertCircle, RefreshCw } from 'lucide-react';
 import { Navbar, ActiveTab } from './components/Navbar';
 import { PromptCreator } from './components/PromptCreator';
 import { ExecutionModal } from './components/ExecutionModal';
@@ -21,6 +21,16 @@ export const App: React.FC = () => {
   const [currentProject, setCurrentProject] = useState<ProjectEntity | null>(null);
   const [projectVersions, setProjectVersions] = useState<VersionEntity[]>([]);
   const [activeVersionIndex, setActiveVersionIndex] = useState<number>(0);
+
+  // 3-way top-level workspace section: 'request' | 'tasks' | 'result'
+  const [workspaceSection, setWorkspaceSection] = useState<'request' | 'tasks' | 'result'>('result');
+
+  // Route loading state and error handling
+  const [isRouteLoading, setIsRouteLoading] = useState<boolean>(() => {
+    const path = window.location.pathname;
+    return path.startsWith('/jobs/') || path.startsWith('/projects/');
+  });
+  const [routeError, setRouteError] = useState<{ title: string; message: string; id: string } | null>(null);
 
   // History & Templates Data
   const [projectsList, setProjectsList] = useState<any[]>([]);
@@ -87,6 +97,7 @@ export const App: React.FC = () => {
                 setActiveVersionIndex(Math.max(0, pData.versions.length - 1));
               }
             }
+            setWorkspaceSection('result');
             loadProjects();
             setIsExecuting(false);
           }
@@ -104,16 +115,34 @@ export const App: React.FC = () => {
 
   // Load a job by unique ID (allows resuming from URL or bookmark)
   const loadJobById = useCallback(async (jobId: string) => {
+    setIsRouteLoading(true);
+    setRouteError(null);
     try {
       const res = await fetch(`/api/jobs/${jobId}`);
       if (!res.ok) {
-        console.warn(`Job ${jobId} not found`);
-        window.history.replaceState(null, '', '/');
+        setRouteError({
+          title: 'Задание не найдено',
+          message: `Задание "${jobId}" не найдено в текущей базе данных. Если вы перешли по ссылке из другого окружения (ветка или продакшен), проверьте адрес хоста.`,
+          id: jobId,
+        });
+        setIsRouteLoading(false);
         return;
       }
 
       const job = await res.json();
       setActiveJobId(job.id);
+
+      const promptText =
+        job.rawPrompt ||
+        job.intermediateResults?.rawPrompt ||
+        job.intermediateResults?.analyzer?.userGoal ||
+        '';
+      if (promptText) {
+        setEditorDraftPrompt(promptText);
+      }
+      if (job.targetEnvironment) {
+        setEditorDraftTarget(job.targetEnvironment);
+      }
 
       // If job is already completed
       if (job.status === 'completed') {
@@ -186,7 +215,9 @@ export const App: React.FC = () => {
         setProjectVersions(loadedVersions);
         setActiveVersionIndex(Math.max(0, loadedVersions.length - 1));
         setActiveTab('create');
+        setWorkspaceSection('result');
         setIsExecuting(false);
+        setIsRouteLoading(false);
         return;
       }
 
@@ -224,6 +255,7 @@ export const App: React.FC = () => {
 
         setIsExecuting(true);
         setActiveTab('create');
+        setIsRouteLoading(false);
         attachToJobEvents(job.id, job.projectId);
         return;
       }
@@ -249,28 +281,60 @@ export const App: React.FC = () => {
         });
         setIsExecuting(true);
         setActiveTab('create');
+        setIsRouteLoading(false);
       }
-    } catch (err) {
-      console.error('Failed to load job by ID:', err);
+    } catch (err: any) {
+      setRouteError({
+        title: 'Ошибка соединения',
+        message: err.message || 'Не удалось связаться с сервером',
+        id: jobId,
+      });
+      setIsRouteLoading(false);
     }
   }, [attachToJobEvents]);
 
   // Load a project by ID
   const handleSelectProject = useCallback(async (projectId: string, updateUrl = true) => {
+    setIsRouteLoading(true);
+    setRouteError(null);
     try {
       const res = await fetch(`/api/projects/${projectId}`);
-      if (res.ok) {
-        const data = await res.json();
-        setCurrentProject(data.project);
-        setProjectVersions(data.versions);
-        setActiveVersionIndex(Math.max(0, data.versions.length - 1));
-        setActiveTab('create');
-        if (updateUrl) {
-          window.history.pushState(null, '', `/projects/${projectId}`);
-        }
+      if (!res.ok) {
+        setRouteError({
+          title: 'Проект не найден',
+          message: `Проект с ID "${projectId}" не найден. Возможно, он был удален или создан в другом окружении.`,
+          id: projectId,
+        });
+        setIsRouteLoading(false);
+        return;
       }
-    } catch (err) {
-      console.warn('Failed to load project:', err);
+      const data = await res.json();
+      setCurrentProject(data.project);
+      setProjectVersions(data.versions || []);
+      const verCount = data.versions ? data.versions.length : 0;
+      setActiveVersionIndex(Math.max(0, verCount - 1));
+
+      const latestVer = verCount > 0 ? data.versions[verCount - 1] : null;
+      if (latestVer?.rawPrompt) {
+        setEditorDraftPrompt(latestVer.rawPrompt);
+        setEditorDraftTarget(latestVer.targetEnvironment);
+      } else if (data.project?.title) {
+        setEditorDraftPrompt(data.project.title);
+      }
+
+      setActiveTab('create');
+      setWorkspaceSection('result');
+      if (updateUrl) {
+        window.history.pushState(null, '', `/projects/${projectId}`);
+      }
+    } catch (err: any) {
+      setRouteError({
+        title: 'Ошибка соединения',
+        message: err.message || 'Не удалось связаться с сервером',
+        id: projectId,
+      });
+    } finally {
+      setIsRouteLoading(false);
     }
   }, []);
 
@@ -280,6 +344,11 @@ export const App: React.FC = () => {
     const searchParams = new URLSearchParams(window.location.search);
     const jobParam = searchParams.get('job') || searchParams.get('jobId');
     const projectParam = searchParams.get('project') || searchParams.get('projectId');
+    const tabParam = searchParams.get('tab') || searchParams.get('section');
+
+    if (tabParam === 'request' || tabParam === 'tasks' || tabParam === 'result') {
+      setWorkspaceSection(tabParam);
+    }
 
     const jobMatch = path.match(/^\/jobs\/([a-zA-Z0-9_-]+)/);
     const targetJobId = jobMatch ? jobMatch[1] : jobParam;
@@ -313,16 +382,20 @@ export const App: React.FC = () => {
     // Default: root path
     if (path === '/') {
       setActiveTab('create');
+      setIsRouteLoading(false);
     }
   }, [loadJobById, handleSelectProject]);
+
+  const handleUrlRoutingRef = useRef(handleUrlRouting);
+  handleUrlRoutingRef.current = handleUrlRouting;
 
   useEffect(() => {
     loadProjects();
     loadTemplates();
-    handleUrlRouting();
+    handleUrlRoutingRef.current();
 
     const handlePopState = () => {
-      handleUrlRouting();
+      handleUrlRoutingRef.current();
     };
     window.addEventListener('popstate', handlePopState);
     return () => {
@@ -331,7 +404,7 @@ export const App: React.FC = () => {
         eventSourceRef.current.close();
       }
     };
-  }, [handleUrlRouting]);
+  }, []);
 
   // Tab navigation with URL updates
   const handleSelectTab = (tab: ActiveTab) => {
@@ -491,6 +564,8 @@ export const App: React.FC = () => {
     setCurrentProject(null);
     setProjectVersions([]);
     setActiveJobId(null);
+    setRouteError(null);
+    setWorkspaceSection('request');
     window.history.pushState(null, '', '/');
   };
 
@@ -517,74 +592,201 @@ export const App: React.FC = () => {
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {activeTab === 'create' && (
           <div className="space-y-8 animate-fade-in">
-            {activeVersion ? (
-              <div className="space-y-6">
-                <div className="flex items-center justify-between pb-4 border-b border-slate-800">
-                  <div>
-                    <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
-                      {currentProject?.title}
-                    </h1>
-                    <p className="text-xs text-slate-400 mt-1">
-                      Спецификация и System Prompt для целевого AI-агента
-                    </p>
-                  </div>
+            {/* 1. Loading spinner when opening link */}
+            {isRouteLoading && (
+              <div className="py-24 flex flex-col items-center justify-center space-y-4">
+                <Loader2 className="w-10 h-10 text-indigo-500 animate-spin" />
+                <p className="text-sm font-semibold text-slate-300">
+                  Загрузка проекта и результатов генерации...
+                </p>
+              </div>
+            )}
+
+            {/* 2. Error banner if job/project link not found */}
+            {!isRouteLoading && routeError && (
+              <div className="max-w-2xl mx-auto my-8 p-6 rounded-2xl bg-slate-900 border border-rose-500/30 text-center space-y-4 shadow-xl">
+                <div className="w-12 h-12 rounded-full bg-rose-500/10 text-rose-400 flex items-center justify-center mx-auto">
+                  <AlertCircle className="w-6 h-6" />
+                </div>
+                <h2 className="text-lg font-bold text-white">{routeError.title}</h2>
+                <p className="text-xs text-slate-300 leading-relaxed max-w-lg mx-auto">
+                  {routeError.message}
+                </p>
+                <div className="flex items-center justify-center gap-3 pt-2">
                   <button
-                    onClick={handleNewPrompt}
-                    className="px-4 py-2 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 rounded-xl text-xs font-semibold transition-colors"
+                    onClick={() => {
+                      setRouteError(null);
+                      handleNewPrompt();
+                    }}
+                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-lg shadow-indigo-600/20"
                   >
-                    + Новый промпт
+                    Создать новый промпт
+                  </button>
+                  <button
+                    onClick={() => {
+                      setRouteError(null);
+                      setActiveTab('history');
+                      window.history.pushState(null, '', '/history');
+                    }}
+                    className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold"
+                  >
+                    Перейти в историю
                   </button>
                 </div>
-
-                <ResultView
-                  version={activeVersion}
-                  previousVersion={previousVersion}
-                  onApplyRevision={handleApplyRevision}
-                  onRegenerate={() => {
-                    handleGenerate({
-                      rawPrompt: activeVersion.rawPrompt,
-                      targetEnvironment: activeVersion.targetEnvironment,
-                      generationMode: activeVersion.generationMode,
-                      preferences: {
-                        targetLanguage: activeVersion.settings?.targetLanguage || 'ru',
-                        detailLevel: activeVersion.settings?.detailLevel || 'detailed',
-                        includeArchitecturalAdditions: true,
-                        includeExplanations: true,
-                      },
-                    });
-                  }}
-                  onEditPromptInCreator={(rawPrompt) => {
-                    setEditorDraftPrompt(rawPrompt);
-                    setEditorDraftTarget(activeVersion.targetEnvironment);
-                    setCurrentProject(null);
-                    setProjectVersions([]);
-                    setActiveJobId(null);
-                    window.history.pushState(null, '', '/');
-                  }}
-                  isRevising={isRevising}
-                />
               </div>
-            ) : (
-              <div className="max-w-4xl mx-auto space-y-6">
-                <div className="text-center space-y-2 mb-8">
-                  <h1 className="text-2xl sm:text-4xl font-extrabold text-white tracking-tight">
-                    Превратите идею в{' '}
-                    <span className="bg-gradient-to-r from-indigo-400 via-violet-400 to-amber-300 bg-clip-text text-transparent">
-                      безупречное ТЗ
-                    </span>
-                  </h1>
-                  <p className="text-sm text-slate-400 max-w-xl mx-auto">
-                    Глубокий анализ требований, выявление архитектурных пробелов, синтез инвариантов и подготовка System & User промптов для AI-агентов.
-                  </p>
-                </div>
+            )}
 
-                <PromptCreator
-                  onGenerate={handleGenerate}
-                  isLoading={isExecuting}
-                  initialPrompt={editorDraftPrompt}
-                  initialTarget={editorDraftTarget}
-                />
-              </div>
+            {/* 3. Main Workspace when not loading and no error */}
+            {!isRouteLoading && !routeError && (
+              <>
+                {activeVersion ? (
+                  <div className="space-y-6">
+                    <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+                      <div>
+                        <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
+                          {currentProject?.title}
+                        </h1>
+                        <p className="text-xs text-slate-400 mt-1">
+                          Спецификация и System Prompt для целевого AI-агента
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        {projectVersions.length > 1 && (
+                          <div className="flex items-center gap-1.5 bg-slate-900 p-1 rounded-xl border border-slate-800 text-xs">
+                            <span className="text-[11px] text-slate-400 px-2 font-medium">Версия:</span>
+                            {projectVersions.map((v, idx) => (
+                              <button
+                                key={v.id}
+                                onClick={() => setActiveVersionIndex(idx)}
+                                className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                                  activeVersionIndex === idx
+                                    ? 'bg-indigo-600 text-white shadow-sm'
+                                    : 'text-slate-400 hover:text-white'
+                                }`}
+                              >
+                                v{v.versionNumber}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+
+                        <button
+                          onClick={handleNewPrompt}
+                          className="px-4 py-2 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 rounded-xl text-xs font-semibold transition-colors"
+                        >
+                          + Новый промпт
+                        </button>
+                      </div>
+                    </div>
+
+                    <ResultView
+                      version={activeVersion}
+                      previousVersion={previousVersion}
+                      onApplyRevision={handleApplyRevision}
+                      onRegenerate={(customPrompt, customTarget) => {
+                        handleGenerate({
+                          rawPrompt: customPrompt || activeVersion.rawPrompt,
+                          targetEnvironment: customTarget || activeVersion.targetEnvironment,
+                          generationMode: activeVersion.generationMode,
+                          preferences: {
+                            targetLanguage: activeVersion.settings?.targetLanguage || 'ru',
+                            detailLevel: activeVersion.settings?.detailLevel || 'detailed',
+                            includeArchitecturalAdditions: true,
+                            includeExplanations: true,
+                            customInstructions: activeVersion.settings?.customInstructions,
+                          },
+                        });
+                      }}
+                      activeSection={workspaceSection}
+                      onSectionChange={setWorkspaceSection}
+                      isRevising={isRevising}
+                    />
+                  </div>
+                ) : (
+                  <div className="space-y-6">
+                    {/* Top 3-way navigation even before generation */}
+                    <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-1.5 flex items-center gap-1.5 shadow-lg max-w-4xl mx-auto">
+                      <button
+                        onClick={() => setWorkspaceSection('request')}
+                        className={`flex-1 py-3 px-4 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-all ${
+                          workspaceSection === 'request'
+                            ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                            : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                        }`}
+                      >
+                        <FileText className="w-4 h-4" />
+                        <span>1. Запрос</span>
+                      </button>
+
+                      <button
+                        onClick={() => setWorkspaceSection('tasks')}
+                        className={`flex-1 py-3 px-4 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-all ${
+                          workspaceSection === 'tasks'
+                            ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                            : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                        }`}
+                      >
+                        <CheckSquare className="w-4 h-4" />
+                        <span>2. Какие были задачи</span>
+                      </button>
+
+                      <button
+                        onClick={() => setWorkspaceSection('result')}
+                        className={`flex-1 py-3 px-4 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-all ${
+                          workspaceSection === 'result'
+                            ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                            : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                        }`}
+                      >
+                        <Sparkles className="w-4 h-4" />
+                        <span>3. Результат</span>
+                      </button>
+                    </div>
+
+                    {workspaceSection === 'request' ? (
+                      <div className="max-w-4xl mx-auto space-y-6">
+                        <div className="text-center space-y-2 mb-4">
+                          <h1 className="text-2xl sm:text-4xl font-extrabold text-white tracking-tight">
+                            Превратите идею в{' '}
+                            <span className="bg-gradient-to-r from-indigo-400 via-violet-400 to-amber-300 bg-clip-text text-transparent">
+                              безупречное ТЗ
+                            </span>
+                          </h1>
+                          <p className="text-sm text-slate-400 max-w-xl mx-auto">
+                            Глубокий анализ требований, выявление архитектурных пробелов, синтез инвариантов и подготовка System & User промптов для AI-агентов.
+                          </p>
+                        </div>
+
+                        <PromptCreator
+                          onGenerate={handleGenerate}
+                          isLoading={isExecuting}
+                          initialPrompt={editorDraftPrompt}
+                          initialTarget={editorDraftTarget}
+                        />
+                      </div>
+                    ) : (
+                      <div className="max-w-2xl mx-auto py-16 text-center rounded-2xl border border-dashed border-slate-800 bg-slate-900/40 p-8 space-y-4">
+                        <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 text-indigo-400 flex items-center justify-center mx-auto">
+                          {workspaceSection === 'tasks' ? <CheckSquare className="w-6 h-6" /> : <Sparkles className="w-6 h-6" />}
+                        </div>
+                        <h3 className="text-base font-bold text-white">
+                          {workspaceSection === 'tasks' ? 'Задачи еще не извлечены' : 'Результат еще не сгенерирован'}
+                        </h3>
+                        <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
+                          Перейдите во вкладку «1. Запрос», заполните требования и нажмите кнопку «Сгенерировать ТЗ и System Prompt».
+                        </p>
+                        <button
+                          onClick={() => setWorkspaceSection('request')}
+                          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-lg shadow-indigo-600/20"
+                        >
+                          ← Перейти к запросу
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}

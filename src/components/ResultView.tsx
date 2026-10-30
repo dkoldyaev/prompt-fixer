@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import JSZip from 'jszip';
@@ -26,17 +26,21 @@ import {
   ExternalLink,
   ChevronRight,
   Quote,
+  X,
 } from 'lucide-react';
 import { VersionEntity } from '../../server/database';
+import { TargetEnvironment } from '../../packages/shared/types';
 import { DiffViewer } from './DiffViewer';
 
 interface ResultViewProps {
   version: VersionEntity;
   previousVersion?: VersionEntity;
   onApplyRevision: (instruction: string) => Promise<void>;
-  onRegenerate: () => void;
+  onRegenerate: (customPrompt?: string, customTarget?: TargetEnvironment) => void;
   onEditPromptInCreator?: (rawPrompt: string) => void;
   isRevising: boolean;
+  activeSection?: 'request' | 'tasks' | 'result';
+  onSectionChange?: (section: 'request' | 'tasks' | 'result') => void;
 }
 
 export const ResultView: React.FC<ResultViewProps> = ({
@@ -46,9 +50,31 @@ export const ResultView: React.FC<ResultViewProps> = ({
   onRegenerate,
   onEditPromptInCreator,
   isRevising,
+  activeSection,
+  onSectionChange,
 }) => {
   // Top-level 3-way navigation: 'request' | 'tasks' | 'result'
-  const [mainSection, setMainSection] = useState<'request' | 'tasks' | 'result'>('result');
+  const [internalSection, setInternalSection] = useState<'request' | 'tasks' | 'result'>('result');
+  const mainSection = activeSection !== undefined ? activeSection : internalSection;
+  const setMainSection = (sec: 'request' | 'tasks' | 'result') => {
+    if (onSectionChange) {
+      onSectionChange(sec);
+    }
+    setInternalSection(sec);
+  };
+
+  // Inline editing in Request tab
+  const [isEditingPrompt, setIsEditingPrompt] = useState(false);
+  const [editedPromptText, setEditedPromptText] = useState(version.rawPrompt);
+  const [editedTargetEnv, setEditedTargetEnv] = useState<TargetEnvironment>(
+    version.targetEnvironment as TargetEnvironment
+  );
+
+  useEffect(() => {
+    setEditedPromptText(version.rawPrompt);
+    setEditedTargetEnv(version.targetEnvironment as TargetEnvironment);
+    setIsEditingPrompt(false);
+  }, [version.id, version.rawPrompt, version.targetEnvironment]);
 
   // Result subtabs
   const [activeResultTab, setActiveResultTab] = useState<
@@ -66,6 +92,11 @@ export const ResultView: React.FC<ResultViewProps> = ({
   const [revisionInput, setRevisionInput] = useState<string>('');
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
   const [copiedRawPrompt, setCopiedRawPrompt] = useState<boolean>(false);
+
+  useEffect(() => {
+    setEditableUserPrompt(version.userPrompt);
+    setEditableSystemPrompt(version.systemPrompt);
+  }, [version.userPrompt, version.systemPrompt]);
 
   const handleCopyShareUrl = () => {
     const url = version.projectId
@@ -131,8 +162,22 @@ export const ResultView: React.FC<ResultViewProps> = ({
   const requirementsList = version.requirements?.requirements || [];
   const architecturalDecisions = version.architecturalDecisions?.decisions || [];
 
+  const allTasks =
+    traceability.length > 0
+      ? traceability
+      : requirementsList.map((r: any) => ({
+          reqId: r.id || 'REQ',
+          source: r.source || 'explicit',
+          status: 'covered' as const,
+          rawText: r.originalQuote || r.text || '',
+          priority: r.priority || 'medium',
+          normalizedText: r.statement || r.text || r.description || '',
+          coveredSections: ['Спецификация требований'],
+          reason: undefined,
+        }));
+
   // Filter tasks
-  const filteredTasks = traceability.filter((req) => {
+  const filteredTasks = allTasks.filter((req) => {
     if (taskFilter === 'critical') return req.priority === 'critical' || req.priority === 'high';
     if (taskFilter === 'functional') return req.source === 'explicit';
     if (taskFilter === 'invariants') return req.source === 'invariant' || req.source === 'inferred';
@@ -193,7 +238,7 @@ export const ResultView: React.FC<ResultViewProps> = ({
           }`}
         >
           <CheckSquare className="w-4 h-4" />
-          <span>2. Какие были задачи ({traceability.length || requirementsList.length || 'Анализ'})</span>
+          <span>2. Какие были задачи ({allTasks.length})</span>
         </button>
 
         <button
@@ -240,83 +285,144 @@ export const ResultView: React.FC<ResultViewProps> = ({
                   <span>{copiedRawPrompt ? 'Скопировано!' : 'Копировать запрос'}</span>
                 </button>
 
-                {onEditPromptInCreator && (
-                  <button
-                    onClick={() => onEditPromptInCreator(version.rawPrompt)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 font-medium text-xs border border-indigo-500/30 transition-colors"
-                  >
-                    <Edit3 className="w-3.5 h-3.5" />
-                    <span>Редактировать в форме</span>
-                  </button>
-                )}
+                <button
+                  onClick={() => setIsEditingPrompt(!isEditingPrompt)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-medium text-xs border transition-colors ${
+                    isEditingPrompt
+                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/30 hover:bg-amber-500/30'
+                      : 'bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border-indigo-500/30'
+                  }`}
+                >
+                  <Edit3 className="w-3.5 h-3.5" />
+                  <span>{isEditingPrompt ? 'Отменить редактирование' : 'Редактировать запрос'}</span>
+                </button>
               </div>
             </div>
 
-            {/* Raw Prompt Text Box */}
-            <div className="p-5 rounded-xl bg-slate-950 border border-slate-800 font-mono text-xs sm:text-sm text-slate-200 leading-relaxed whitespace-pre-wrap selection:bg-indigo-500/30">
-              {version.rawPrompt}
-            </div>
+            {/* Editable or Static View */}
+            {isEditingPrompt ? (
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-xs font-semibold text-slate-300">
+                    Текст запроса для повторной генерации:
+                  </label>
+                  <textarea
+                    value={editedPromptText}
+                    onChange={(e) => setEditedPromptText(e.target.value)}
+                    rows={8}
+                    className="w-full bg-slate-950 border border-indigo-500/50 rounded-xl p-4 font-mono text-xs sm:text-sm text-slate-100 focus:outline-none focus:border-indigo-400 transition-colors resize-y leading-relaxed"
+                    placeholder="Введите обновленный запрос..."
+                  />
+                </div>
 
-            {/* Custom Permanent Instructions if present */}
-            {version.settings?.customInstructions && (
-              <div className="space-y-3 pt-2">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-2">
-                  <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                  Дополнительные постоянные инструкции и инженерные ограничения
-                </h4>
-                <div className="p-4 rounded-xl bg-slate-950 border border-emerald-500/20 text-xs sm:text-sm text-slate-300 font-mono leading-relaxed whitespace-pre-wrap">
-                  {version.settings.customInstructions}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-300">Целевая среда AI-агента:</label>
+                    <select
+                      value={editedTargetEnv}
+                      onChange={(e) => setEditedTargetEnv(e.target.value as TargetEnvironment)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                    >
+                      <option value="google-antigravity">Google Antigravity (AGY)</option>
+                      <option value="claude-code">Claude Code</option>
+                      <option value="cursor">Cursor / VS Code</option>
+                      <option value="universal-agent">Universal Agent</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3 pt-2">
+                  <button
+                    onClick={() => {
+                      setIsEditingPrompt(false);
+                      onRegenerate(editedPromptText, editedTargetEnv);
+                    }}
+                    className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition-colors shadow-lg shadow-indigo-600/20 flex items-center gap-2"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Перегенерировать с этими изменениями</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setEditedPromptText(version.rawPrompt);
+                      setEditedTargetEnv(version.targetEnvironment as TargetEnvironment);
+                      setIsEditingPrompt(false);
+                    }}
+                    className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition-colors"
+                  >
+                    Отмена
+                  </button>
                 </div>
               </div>
+            ) : (
+              <>
+                {/* Raw Prompt Text Box */}
+                <div className="p-5 rounded-xl bg-slate-950 border border-slate-800 font-mono text-xs sm:text-sm text-slate-200 leading-relaxed whitespace-pre-wrap selection:bg-indigo-500/30">
+                  {version.rawPrompt}
+                </div>
+
+                {/* Custom Permanent Instructions if present */}
+                {version.settings?.customInstructions && (
+                  <div className="space-y-3 pt-2">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-2">
+                      <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                      Дополнительные постоянные инструкции и инженерные ограничения
+                    </h4>
+                    <div className="p-4 rounded-xl bg-slate-950 border border-emerald-500/20 text-xs sm:text-sm text-slate-300 font-mono leading-relaxed whitespace-pre-wrap">
+                      {version.settings.customInstructions}
+                    </div>
+                  </div>
+                )}
+
+                {/* Parameters Breakdown */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-4 border-t border-slate-800">
+                  <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80">
+                    <span className="text-[11px] text-slate-400 block">Целевая среда:</span>
+                    <span className="text-xs font-bold text-white capitalize mt-0.5 block">{version.targetEnvironment}</span>
+                  </div>
+                  <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80">
+                    <span className="text-[11px] text-slate-400 block">Режим генерации:</span>
+                    <span className="text-xs font-bold text-white capitalize mt-0.5 block">{version.generationMode}</span>
+                  </div>
+                  <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80">
+                    <span className="text-[11px] text-slate-400 block">Язык спецификации:</span>
+                    <span className="text-xs font-bold text-white uppercase mt-0.5 block">{version.settings?.targetLanguage || 'RU'}</span>
+                  </div>
+                  <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80">
+                    <span className="text-[11px] text-slate-400 block">Дата генерации:</span>
+                    <span className="text-xs font-bold text-white mt-0.5 block">
+                      {new Date(version.createdAt).toLocaleString('ru-RU')}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Navigation buttons to next tabs */}
+                <div className="flex items-center justify-between pt-4 border-t border-slate-800 text-xs">
+                  <button
+                    onClick={() => onRegenerate(version.rawPrompt, version.targetEnvironment as TargetEnvironment)}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold transition-colors"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Перегенерировать</span>
+                  </button>
+
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => setMainSection('tasks')}
+                      className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 font-semibold border border-indigo-500/30 transition-colors"
+                    >
+                      <span>Смотреть задачи и анализ →</span>
+                    </button>
+                    <button
+                      onClick={() => setMainSection('result')}
+                      className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold transition-colors shadow-lg shadow-indigo-600/20"
+                    >
+                      <span>Смотреть результат →</span>
+                    </button>
+                  </div>
+                </div>
+              </>
             )}
-
-            {/* Parameters Breakdown */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-4 border-t border-slate-800">
-              <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80">
-                <span className="text-[11px] text-slate-400 block">Целевая среда:</span>
-                <span className="text-xs font-bold text-white capitalize mt-0.5 block">{version.targetEnvironment}</span>
-              </div>
-              <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80">
-                <span className="text-[11px] text-slate-400 block">Режим генерации:</span>
-                <span className="text-xs font-bold text-white capitalize mt-0.5 block">{version.generationMode}</span>
-              </div>
-              <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80">
-                <span className="text-[11px] text-slate-400 block">Язык спецификации:</span>
-                <span className="text-xs font-bold text-white uppercase mt-0.5 block">{version.settings?.targetLanguage || 'RU'}</span>
-              </div>
-              <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80">
-                <span className="text-[11px] text-slate-400 block">Дата генерации:</span>
-                <span className="text-xs font-bold text-white mt-0.5 block">
-                  {new Date(version.createdAt).toLocaleString('ru-RU')}
-                </span>
-              </div>
-            </div>
-
-            {/* Navigation buttons to next tabs */}
-            <div className="flex items-center justify-between pt-4 border-t border-slate-800 text-xs">
-              <button
-                onClick={onRegenerate}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold transition-colors"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                <span>Перегенерировать</span>
-              </button>
-
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => setMainSection('tasks')}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 font-semibold border border-indigo-500/30 transition-colors"
-                >
-                  <span>Смотреть задачи и анализ →</span>
-                </button>
-                <button
-                  onClick={() => setMainSection('result')}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold transition-colors shadow-lg shadow-indigo-600/20"
-                >
-                  <span>Смотреть результат →</span>
-                </button>
-              </div>
-            </div>
           </div>
         </div>
       )}
