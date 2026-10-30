@@ -133,6 +133,7 @@ export class PipelineOrchestrator {
           modelId: config.OPENAI_FAST_MODEL,
           systemPrompt: combinedSystemPrompt,
           userInput: rawPrompt,
+          zodSchema: PromptPackageSchema,
         },
         (raw) => PromptPackageSchema.parse(raw),
         () => {
@@ -196,6 +197,7 @@ export class PipelineOrchestrator {
         modelId: config.OPENAI_ANALYZER_MODEL,
         systemPrompt: analyzerTemplate?.content || '',
         userInput: rawPrompt,
+        zodSchema: RequirementsAnalysisSchema,
       },
       (raw) => RequirementsAnalysisSchema.parse(raw),
       () => generateMockAnalyzerOutput(rawPrompt, targetEnvironment)
@@ -220,6 +222,7 @@ export class PipelineOrchestrator {
         modelId: config.OPENAI_ARCHITECT_MODEL,
         systemPrompt: architectTemplate?.content || '',
         userInput: architectInput,
+        zodSchema: SolutionArchitectureSchema,
       },
       (raw) => SolutionArchitectureSchema.parse(raw),
       () => generateMockArchitectOutput(rawPrompt, analyzerResult.data)
@@ -247,6 +250,7 @@ export class PipelineOrchestrator {
         modelId: config.OPENAI_COMPOSER_MODEL,
         systemPrompt: composerSystem,
         userInput: composerInput,
+        zodSchema: PromptPackageSchema,
       },
       (raw) => PromptPackageSchema.parse(raw),
       () => generateMockComposerOutput(rawPrompt, targetEnvironment, analyzerResult.data, architectResult.data)
@@ -273,6 +277,7 @@ export class PipelineOrchestrator {
         modelId: config.OPENAI_REVIEWER_MODEL,
         systemPrompt: reviewerTemplate?.content || '',
         userInput: reviewerInput,
+        zodSchema: ReviewReportSchema,
       },
       (raw) => ReviewReportSchema.parse(raw),
       () => generateMockReviewOutput(rawPrompt, analyzerResult.data, composerResult.data)

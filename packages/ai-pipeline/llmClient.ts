@@ -1,4 +1,6 @@
 import OpenAI from 'openai';
+import { zodResponseFormat } from 'openai/helpers/zod';
+import { z } from 'zod';
 import { getConfig } from '../shared/config';
 import {
   RequirementsAnalysis,
@@ -20,12 +22,29 @@ export interface LLMCallParams {
   modelId: string;
   systemPrompt: string;
   userInput: string;
-  responseSchema?: any;
+  zodSchema?: z.ZodTypeAny;
 }
 
 export interface LLMCallResult<T> {
   data: T;
   metrics: StageUsageMetric;
+}
+
+/**
+ * Normalizes snake_case keys to camelCase in JSON objects to ensure smooth schema validation.
+ */
+function normalizeKeys(obj: any): any {
+  if (Array.isArray(obj)) {
+    return obj.map(normalizeKeys);
+  } else if (obj !== null && typeof obj === 'object') {
+    const res: Record<string, any> = {};
+    for (const [key, val] of Object.entries(obj)) {
+      const camelKey = key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+      res[camelKey] = normalizeKeys(val);
+    }
+    return res;
+  }
+  return obj;
 }
 
 /**
@@ -76,20 +95,24 @@ export async function executeStructuredLLMCall<T>(
   while (attempts <= maxRetries) {
     attempts++;
     try {
+      const responseFormat = params.zodSchema
+        ? zodResponseFormat(params.zodSchema, params.stage.replace(/[^a-zA-Z0-9_]/g, '_'))
+        : { type: 'json_object' as const };
+
       const response = await client.chat.completions.create(
         {
           model: params.modelId,
           messages: [
             {
               role: 'system',
-              content: `${params.systemPrompt}\n\nIMPORTANT: You MUST respond strictly in valid JSON format matching the schema specification.`,
+              content: `${params.systemPrompt}\n\nIMPORTANT: You MUST respond strictly in valid JSON format matching the schema specification. Return JSON object with keys: systemPrompt, userPrompt, whatImproved, assumptions, unresolvedQuestions.`,
             },
             {
               role: 'user',
               content: `<user_untrusted_input>\n${params.userInput}\n</user_untrusted_input>`,
             },
           ],
-          response_format: { type: 'json_object' },
+          response_format: responseFormat,
           max_tokens: config.AI_MAX_OUTPUT_TOKENS,
         },
         {
@@ -104,7 +127,26 @@ export async function executeStructuredLLMCall<T>(
       }
 
       const parsedJson = JSON.parse(rawContent);
-      const validatedData = validator(parsedJson);
+      const normalizedJson = normalizeKeys(parsedJson);
+
+      // Handle fallback field mapping if needed
+      if (!normalizedJson.whatImproved && normalizedJson.improvements) {
+        normalizedJson.whatImproved = normalizedJson.improvements;
+      }
+      if (!normalizedJson.systemPrompt && normalizedJson.system) {
+        normalizedJson.systemPrompt = normalizedJson.system;
+      }
+      if (!normalizedJson.userPrompt && normalizedJson.user) {
+        normalizedJson.userPrompt = normalizedJson.user;
+      }
+      if (!normalizedJson.unresolvedQuestions) {
+        normalizedJson.unresolvedQuestions = [];
+      }
+      if (!normalizedJson.assumptions) {
+        normalizedJson.assumptions = [];
+      }
+
+      const validatedData = validator(normalizedJson);
 
       const usage = response.usage;
       const inputTokens = usage?.prompt_tokens ?? Math.floor(params.userInput.length / 4);
