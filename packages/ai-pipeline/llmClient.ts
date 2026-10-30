@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { zodResponseFormat } from 'openai/helpers/zod';
 import { z } from 'zod';
+import { Agent } from 'undici';
 import { getConfig } from '../shared/config';
 import {
   RequirementsAnalysis,
@@ -93,8 +94,16 @@ export async function executeStructuredLLMCall<T>(
   }
 
   // Real OpenAI invocation with retry and backoff
+  const undiciAgent = new Agent({
+    headersTimeout: Math.max(config.AI_REQUEST_TIMEOUT_MS * 2, 900000),
+    bodyTimeout: Math.max(config.AI_REQUEST_TIMEOUT_MS * 2, 900000),
+    connectTimeout: 60000,
+  });
+
   const client = new OpenAI({
     apiKey: config.OPENAI_API_KEY,
+    timeout: config.AI_REQUEST_TIMEOUT_MS,
+    httpAgent: undiciAgent,
   });
 
   const maxRetries = config.AI_RETRY_LIMIT;
