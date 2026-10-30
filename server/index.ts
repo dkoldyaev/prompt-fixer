@@ -539,8 +539,8 @@ app.use((_req: Request, res: Response) => {
 // Start listening if run directly
 if (process.env.NODE_ENV !== 'test') {
   const port = config.API_PORT;
-  app.listen(port, () => {
-    console.log(`[AI Prompt Rewriter] Server running on http://localhost:${port}`);
+  app.listen(port, '0.0.0.0', () => {
+    console.log(`[AI Prompt Rewriter] Server running on http://0.0.0.0:${port}`);
     console.log(`[AI Prompt Rewriter] Strict Configuration: VALIDATED`);
     console.log(`[AI Prompt Rewriter] Public App Origin: ${config.PUBLIC_APP_ORIGIN}`);
   });
