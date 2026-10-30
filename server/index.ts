@@ -100,6 +100,16 @@ const CreateJobSchema = z.object({
       includeArchitecturalAdditions: z.boolean().optional(),
       includeExplanations: z.boolean().optional(),
       customInstructions: z.string().optional(),
+      stageModels: z
+        .object({
+          analyzer: z.string().optional(),
+          architect: z.string().optional(),
+          composer: z.string().optional(),
+          reviewer: z.string().optional(),
+          fast: z.string().optional(),
+        })
+        .optional(),
+      reasoningEffort: z.enum(['low', 'medium', 'high']).optional(),
     })
     .optional(),
 });

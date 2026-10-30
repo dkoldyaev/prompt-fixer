@@ -47,15 +47,16 @@ export const SettingsView: React.FC = () => {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
           {[
-            { stage: '1. Requirements Analyzer', key: 'OPENAI_ANALYZER_MODEL', val: healthData?.config?.analyzerModel || 'gpt-4o' },
-            { stage: '2. Solution Architect', key: 'OPENAI_ARCHITECT_MODEL', val: healthData?.config?.architectModel || 'gpt-4o' },
-            { stage: '3. Prompt Composer', key: 'OPENAI_COMPOSER_MODEL', val: healthData?.config?.composerModel || 'gpt-4o' },
-            { stage: '4. Quality Reviewer', key: 'OPENAI_REVIEWER_MODEL', val: healthData?.config?.reviewerModel || 'gpt-4o' },
-            { stage: 'Fast Mode Execution', key: 'OPENAI_FAST_MODEL', val: healthData?.config?.fastModel || 'gpt-4o-mini' },
+            { stage: '1. Requirements Analyzer', role: 'Экономия & QA', reasoning: 'medium', key: 'OPENAI_ANALYZER_MODEL', val: healthData?.config?.analyzerModel || 'gpt-6.1-terra' },
+            { stage: '2. Solution Architect', role: 'Качество & Синтез', reasoning: 'medium', key: 'OPENAI_ARCHITECT_MODEL', val: healthData?.config?.architectModel || 'gpt-6.1-sol' },
+            { stage: '3. Prompt Composer', role: 'Качество & Генерация ТЗ', reasoning: 'medium', key: 'OPENAI_COMPOSER_MODEL', val: healthData?.config?.composerModel || 'gpt-6.1-sol' },
+            { stage: '4. Quality Reviewer', role: 'Экономия & Аудит', reasoning: 'medium', key: 'OPENAI_REVIEWER_MODEL', val: healthData?.config?.reviewerModel || 'gpt-6.1-terra' },
+            { stage: 'Fast Mode Execution', role: 'Однопроходный режим', reasoning: 'medium', key: 'OPENAI_FAST_MODEL', val: healthData?.config?.fastModel || 'gpt-6.1-terra' },
           ].map((item, idx) => (
             <div key={idx} className="p-3 bg-slate-800/60 rounded-xl border border-slate-700/60 flex items-center justify-between">
               <div>
                 <span className="font-medium text-slate-300 block">{item.stage}</span>
+                <span className="text-[10px] text-slate-400 block">{item.role} • reasoning: {item.reasoning}</span>
                 <span className="text-[10px] text-slate-500 font-mono">{item.key}</span>
               </div>
               <span className="font-mono font-bold text-indigo-400 px-2 py-1 bg-indigo-500/10 rounded border border-indigo-500/20">

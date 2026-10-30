@@ -306,16 +306,48 @@ export const PromptCreator: React.FC<PromptCreatorProps> = ({ onGenerate, isLoad
             </div>
 
             <div className="sm:col-span-2">
-              <label className="block text-slate-400 font-medium mb-1.5">
-                Дополнительные постоянные инструкции:
+              <label className="block text-slate-300 font-medium mb-1.5">
+                Дополнительные постоянные инструкции (системные требования, линтер, .env, docker):
               </label>
-              <input
-                type="text"
+              <textarea
+                rows={3}
                 value={customInstructions}
                 onChange={(e) => setCustomInstructions(e.target.value)}
-                placeholder="Например: Использовать Tailwind CSS v4, писать чистые функции без сторонних библиотек..."
-                className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg p-2.5 focus:outline-none focus:border-indigo-500 placeholder-slate-500"
+                placeholder="Например: Typescript, строгий линтер, полный запрет fallback значений. Все переменные среды только в .env файлах без fallback, docker-compose.override.yml для БД и Redis..."
+                className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg p-2.5 focus:outline-none focus:border-indigo-500 placeholder-slate-500 font-sans"
               />
+              <p className="text-[11px] text-slate-400 mt-1">
+                Эти инструкции будут переданы на все 4 этапа и гарантированно зафиксированы в системном промпте и секциях ТЗ.
+              </p>
+            </div>
+
+            <div className="sm:col-span-2 mt-2 p-3 bg-indigo-950/30 border border-indigo-800/40 rounded-xl">
+              <div className="text-[11px] font-semibold text-indigo-300 mb-1.5 flex items-center gap-1.5">
+                <Cpu className="w-3.5 h-3.5 text-indigo-400" />
+                Распределение моделей по этапам (Quality / Economy Presets):
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px]">
+                <div className="p-1.5 bg-slate-900/60 rounded border border-slate-800">
+                  <span className="text-slate-400 block">Analysis:</span>
+                  <span className="font-mono text-emerald-400 font-bold">gpt-6.1-terra</span>
+                  <span className="text-slate-500 block">reasoning: medium</span>
+                </div>
+                <div className="p-1.5 bg-slate-900/60 rounded border border-slate-800">
+                  <span className="text-slate-400 block">Architecture:</span>
+                  <span className="font-mono text-indigo-400 font-bold">gpt-6.1-sol</span>
+                  <span className="text-slate-500 block">reasoning: medium</span>
+                </div>
+                <div className="p-1.5 bg-slate-900/60 rounded border border-slate-800">
+                  <span className="text-slate-400 block">Composer:</span>
+                  <span className="font-mono text-indigo-400 font-bold">gpt-6.1-sol</span>
+                  <span className="text-slate-500 block">reasoning: medium</span>
+                </div>
+                <div className="p-1.5 bg-slate-900/60 rounded border border-slate-800">
+                  <span className="text-slate-400 block">Reviewer:</span>
+                  <span className="font-mono text-emerald-400 font-bold">gpt-6.1-terra</span>
+                  <span className="text-slate-500 block">reasoning: medium</span>
+                </div>
+              </div>
             </div>
           </div>
         )}

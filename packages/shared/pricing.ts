@@ -12,6 +12,31 @@ export interface ModelPricing {
 export const PRICING_CATALOG_VERSION = '2026-10-v1';
 
 export const MODEL_PRICING_CATALOG: Record<string, ModelPricing> = {
+  'gpt-6.1-sol': {
+    inputPerMillion: 3.0,
+    outputPerMillion: 12.0,
+    cachedInputPerMillion: 1.5,
+  },
+  'gpt-6.1-terra': {
+    inputPerMillion: 0.25,
+    outputPerMillion: 1.0,
+    cachedInputPerMillion: 0.125,
+  },
+  'gpt-6-sol': {
+    inputPerMillion: 3.0,
+    outputPerMillion: 12.0,
+    cachedInputPerMillion: 1.5,
+  },
+  'gpt-5.6-sol': {
+    inputPerMillion: 3.0,
+    outputPerMillion: 12.0,
+    cachedInputPerMillion: 1.5,
+  },
+  'gpt-5.6-terra': {
+    inputPerMillion: 0.25,
+    outputPerMillion: 1.0,
+    cachedInputPerMillion: 0.125,
+  },
   'gpt-4o': {
     inputPerMillion: 2.5,
     outputPerMillion: 10.0,

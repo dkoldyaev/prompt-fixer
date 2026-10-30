@@ -24,7 +24,7 @@ import {
   generateMockComposerOutput,
   generateMockReviewOutput,
 } from './llmClient';
-import { buildTraceabilityMatrix } from './traceabilityEngine';
+import { buildTraceabilityMatrix, calculateTraceabilityScore } from './traceabilityEngine';
 
 export interface PipelineExecutionOptions {
   jobId: string;
@@ -102,6 +102,19 @@ export class PipelineOrchestrator {
       throw new Error('JOB_CANCELLED');
     }
 
+    // Extract permanent instructions from preferences
+    const customInstructions = options.preferences?.customInstructions?.trim();
+
+    // Stage models and reasoning selection (Quality vs Economy presets)
+    // Quality preset: gpt-6.1-sol for architecture & composer (reasoning: medium)
+    // Economy preset: gpt-6.1-terra for analysis & review (reasoning: medium)
+    const analyzerModel = options.preferences?.stageModels?.analyzer || config.OPENAI_ANALYZER_MODEL;
+    const architectModel = options.preferences?.stageModels?.architect || config.OPENAI_ARCHITECT_MODEL;
+    const composerModel = options.preferences?.stageModels?.composer || config.OPENAI_COMPOSER_MODEL;
+    const reviewerModel = options.preferences?.stageModels?.reviewer || config.OPENAI_REVIEWER_MODEL;
+    const fastModel = options.preferences?.stageModels?.fast || config.OPENAI_FAST_MODEL;
+    const reasoningEffort = options.preferences?.reasoningEffort || 'medium';
+
     // Determine actual execution mode
     let actualMode: 'fast' | 'quality' = 'quality';
     let complexity: ComplexityAssessment | undefined = undefined;
@@ -127,12 +140,17 @@ export class PipelineOrchestrator {
 
       const combinedSystemPrompt = `${fastTemplate?.content || ''}\n\n${targetTemplate?.content || ''}\nLanguage: ${options.preferences?.targetLanguage || 'Russian'}`;
 
+      const fastInput = customInstructions
+        ? `PRIMARY USER TASK:\n${rawPrompt}\n\nADDITIONAL MANDATORY SYSTEM INSTRUCTIONS & CONSTRAINTS:\n${customInstructions}`
+        : rawPrompt;
+
       const fastResult = await executeStructuredLLMCall<PromptPackage>(
         {
           stage: 'fast_generation',
-          modelId: config.OPENAI_FAST_MODEL,
+          modelId: fastModel,
+          reasoningEffort,
           systemPrompt: combinedSystemPrompt,
-          userInput: rawPrompt,
+          userInput: fastInput,
           zodSchema: PromptPackageSchema,
         },
         (raw) => PromptPackageSchema.parse(raw),
@@ -152,9 +170,10 @@ export class PipelineOrchestrator {
       const rapidTraceability = buildTraceabilityMatrix(rapidAnalysis.requirements, fastResult.data.userPrompt);
       const rapidReview: ReviewReport = {
         isApproved: true,
-        score: 95,
+        score: calculateTraceabilityScore(rapidTraceability),
         traceability: rapidTraceability,
         critique: [],
+        fixesApplied: null,
         summary: 'Экспресс-проверка в Fast Mode завершена успешно. Требования сохранены.',
       };
 
@@ -188,15 +207,20 @@ export class PipelineOrchestrator {
     // -------------------------------------------------------------
 
     // STAGE 1: REQUIREMENTS ANALYZER
-    notify('analyzing', 'requirements_analysis', 15, 'Этап 1/4: Детальный анализ и категоризация требований...');
+    notify('analyzing', 'requirements_analysis', 15, 'Этап 1/4: Детальный анализ и категоризация требований (gpt-6.1-terra)...');
     const analyzerTemplate = getPromptTemplate('requirements-analyzer');
+
+    const analyzerInput = customInstructions
+      ? `PRIMARY USER TASK:\n${rawPrompt}\n\nADDITIONAL MANDATORY SYSTEM INSTRUCTIONS & CONSTRAINTS (Crucial! Must extract as explicit requirements with high/critical priority):\n${customInstructions}`
+      : rawPrompt;
 
     const analyzerResult = await executeStructuredLLMCall<RequirementsAnalysis>(
       {
         stage: 'requirements_analyzer',
-        modelId: config.OPENAI_ANALYZER_MODEL,
+        modelId: analyzerModel,
+        reasoningEffort,
         systemPrompt: analyzerTemplate?.content || '',
-        userInput: rawPrompt,
+        userInput: analyzerInput,
         zodSchema: RequirementsAnalysisSchema,
       },
       (raw) => RequirementsAnalysisSchema.parse(raw),
@@ -211,15 +235,16 @@ export class PipelineOrchestrator {
     if (isCancelled()) throw new Error('JOB_CANCELLED');
 
     // STAGE 2: SOLUTION ARCHITECT
-    notify('architecting', 'solution_architecture', 45, 'Этап 2/4: Архитектурное моделирование и инварианты...');
+    notify('architecting', 'solution_architecture', 45, 'Этап 2/4: Архитектурное моделирование и инварианты (gpt-6.1-sol)...');
     const architectTemplate = getPromptTemplate('solution-architect');
 
-    const architectInput = `Original Prompt:\n${rawPrompt}\n\nRequirements Analysis:\n${JSON.stringify(analyzerResult.data, null, 2)}`;
+    const architectInput = `Original Primary Request:\n${rawPrompt}\n\nMandatory System Instructions & Constraints:\n${customInstructions || 'None specified'}\n\nRequirements Analysis:\n${JSON.stringify(analyzerResult.data, null, 2)}`;
 
     const architectResult = await executeStructuredLLMCall<SolutionArchitecture>(
       {
         stage: 'solution_architect',
-        modelId: config.OPENAI_ARCHITECT_MODEL,
+        modelId: architectModel,
+        reasoningEffort,
         systemPrompt: architectTemplate?.content || '',
         userInput: architectInput,
         zodSchema: SolutionArchitectureSchema,
@@ -237,17 +262,18 @@ export class PipelineOrchestrator {
     if (isCancelled()) throw new Error('JOB_CANCELLED');
 
     // STAGE 3: PROMPT COMPOSER
-    notify('composing', 'prompt_composer', 75, 'Этап 3/4: Компоновка System Prompt и User Prompt ТЗ...');
+    notify('composing', 'prompt_composer', 75, 'Этап 3/4: Компоновка System Prompt и User Prompt ТЗ (gpt-6.1-sol)...');
     const composerTemplate = getPromptTemplate('prompt-composer');
     const targetTemplate = getPromptTemplate(`target-${targetEnvironment}`, targetEnvironment);
 
-    const composerSystem = `${composerTemplate?.content || ''}\n\n${targetTemplate?.content || ''}\nLanguage: ${options.preferences?.targetLanguage || 'Russian'}`;
-    const composerInput = `Original Prompt:\n${rawPrompt}\n\nRequirements:\n${JSON.stringify(analyzerResult.data, null, 2)}\n\nArchitecture:\n${JSON.stringify(architectResult.data, null, 2)}`;
+    const composerSystem = `${composerTemplate?.content || ''}\n\n${targetTemplate?.content || ''}\nTarget Language: ${options.preferences?.targetLanguage || 'Russian'}\nDetail Level: ${options.preferences?.detailLevel || 'detailed'}`;
+    const composerInput = `Original Primary Request:\n${rawPrompt}\n\nAdditional Mandatory System Instructions & Constraints (CRUCIAL: MUST BE INTEGRATED IN FULL DETAIL INTO SYSTEM PROMPT AND USER PROMPT SPECIFICATION):\n${customInstructions || 'None specified'}\n\nRequirements Analysis:\n${JSON.stringify(analyzerResult.data, null, 2)}\n\nArchitecture Specification:\n${JSON.stringify(architectResult.data, null, 2)}`;
 
     const composerResult = await executeStructuredLLMCall<PromptPackage>(
       {
         stage: 'prompt_composer',
-        modelId: config.OPENAI_COMPOSER_MODEL,
+        modelId: composerModel,
+        reasoningEffort,
         systemPrompt: composerSystem,
         userInput: composerInput,
         zodSchema: PromptPackageSchema,
@@ -266,15 +292,16 @@ export class PipelineOrchestrator {
     if (isCancelled()) throw new Error('JOB_CANCELLED');
 
     // STAGE 4: QUALITY REVIEWER & AUDIT
-    notify('reviewing', 'quality_reviewer', 90, 'Этап 4/4: Аудит качества и проверка матрицы трассируемости...');
+    notify('reviewing', 'quality_reviewer', 90, 'Этап 4/4: Аудит качества и проверка матрицы трассируемости (gpt-6.1-terra)...');
     const reviewerTemplate = getPromptTemplate('quality-reviewer');
 
-    const reviewerInput = `Original User Prompt:\n${rawPrompt}\n\nRequirements:\n${JSON.stringify(analyzerResult.data, null, 2)}\n\nSystem Prompt Generated:\n${composerResult.data.systemPrompt}\n\nUser Prompt Generated:\n${composerResult.data.userPrompt}`;
+    const reviewerInput = `Original Primary Request:\n${rawPrompt}\n\nAdditional Mandatory System Instructions:\n${customInstructions || 'None specified'}\n\nRequirements:\n${JSON.stringify(analyzerResult.data, null, 2)}\n\nSystem Prompt Generated:\n${composerResult.data.systemPrompt}\n\nUser Prompt Generated:\n${composerResult.data.userPrompt}`;
 
     const reviewerResult = await executeStructuredLLMCall<ReviewReport>(
       {
         stage: 'quality_reviewer',
-        modelId: config.OPENAI_REVIEWER_MODEL,
+        modelId: reviewerModel,
+        reasoningEffort,
         systemPrompt: reviewerTemplate?.content || '',
         userInput: reviewerInput,
         zodSchema: ReviewReportSchema,
@@ -285,20 +312,54 @@ export class PipelineOrchestrator {
 
     recordMetrics(reviewerResult.metrics);
 
-    let finalPrompts = composerResult.data;
-    // If reviewer applied surgical fixes, integrate them
-    if (reviewerResult.data.fixesApplied?.userPrompt) {
-      finalPrompts = {
-        ...finalPrompts,
-        userPrompt: reviewerResult.data.fixesApplied.userPrompt,
-      };
+    let finalPrompts = { ...composerResult.data };
+    // Only integrate surgical prompt fixes if they are genuine full prompt replacements (not short summaries)
+    if (
+      reviewerResult.data.fixesApplied?.userPrompt &&
+      reviewerResult.data.fixesApplied.userPrompt.length > composerResult.data.userPrompt.length * 0.7 &&
+      reviewerResult.data.fixesApplied.userPrompt.includes('1.')
+    ) {
+      finalPrompts.userPrompt = reviewerResult.data.fixesApplied.userPrompt;
     }
-    if (reviewerResult.data.fixesApplied?.systemPrompt) {
-      finalPrompts = {
-        ...finalPrompts,
-        systemPrompt: reviewerResult.data.fixesApplied.systemPrompt,
-      };
+    if (
+      reviewerResult.data.fixesApplied?.systemPrompt &&
+      reviewerResult.data.fixesApplied.systemPrompt.length > composerResult.data.systemPrompt.length * 0.7
+    ) {
+      finalPrompts.systemPrompt = reviewerResult.data.fixesApplied.systemPrompt;
     }
+
+    // Build verified final traceability matrix against the actual final userPrompt
+    const finalTraceability = buildTraceabilityMatrix(
+      analyzerResult.data.requirements,
+      finalPrompts.userPrompt,
+      reviewerResult.data.traceability
+    );
+
+    // Objective quality score calculation
+    const calculatedTraceabilityScore = calculateTraceabilityScore(finalTraceability);
+
+    let normalizedModelScore = reviewerResult.data.score;
+    if (normalizedModelScore <= 1.0) {
+      normalizedModelScore = Math.round(normalizedModelScore * 100);
+    } else if (normalizedModelScore <= 10.0) {
+      normalizedModelScore = Math.round(normalizedModelScore * 10);
+    }
+
+    // Calibrated final score (weighted combination with floor based on verified coverage)
+    const calibratedScore = Math.min(
+      100,
+      Math.max(
+        0,
+        Math.round(calculatedTraceabilityScore * 0.7 + normalizedModelScore * 0.3)
+      )
+    );
+
+    const finalReviewReport: ReviewReport = {
+      ...reviewerResult.data,
+      score: calibratedScore,
+      isApproved: calibratedScore >= 80,
+      traceability: finalTraceability,
+    };
 
     const totalTokens = stageMetrics.reduce((sum, m) => sum + m.inputTokens + m.outputTokens, 0);
     const totalCostUsd = stageMetrics.every((m) => m.costUsd !== null)
@@ -309,7 +370,7 @@ export class PipelineOrchestrator {
       analyzer: analyzerResult.data,
       architect: architectResult.data,
       composer: finalPrompts,
-      reviewReport: reviewerResult.data,
+      reviewReport: finalReviewReport,
       complexity,
     });
 
@@ -322,7 +383,7 @@ export class PipelineOrchestrator {
       analyzerResult: analyzerResult.data,
       architectResult: architectResult.data,
       prompts: finalPrompts,
-      reviewReport: reviewerResult.data,
+      reviewReport: finalReviewReport,
       stageMetrics,
       totalTokens,
       totalCostUsd,
@@ -354,6 +415,7 @@ export class PipelineOrchestrator {
       {
         stage: 'prompt_revision',
         modelId: config.OPENAI_COMPOSER_MODEL,
+        reasoningEffort: 'medium',
         systemPrompt: revisionTemplate?.content || '',
         userInput: inputData,
       },

@@ -35,6 +35,10 @@ Extract and structure:
    - Criticality: critical, high, medium, low
 3. Ambiguities, contradictions, edge cases, risks, and genuine blocking questions.
 
+MANDATORY PRESERVATION OF CUSTOM PERMANENT INSTRUCTIONS:
+If the user input contains "Additional Mandatory System Instructions & Constraints" (such as strict linter, no-fallback policy, .env file conventions, Docker container isolation, compose override rules, specific databases or state managers), you MUST extract EVERY SINGLE ONE of them as an explicit, high/critical priority requirement (category: technical_constraint, prohibition, or invariant).
+Never discard, condense, or omit any user constraint!
+
 IMPORTANT:
 - Never lose or weaken any explicit user constraint or prohibition.
 - Do not substitute user-specified technologies (e.g., if user specified PostgreSQL, do not suggest SQLite).
@@ -48,7 +52,7 @@ IMPORTANT:
     name: 'Solution Architect',
     description: 'Synthesizes domain entities, component boundaries, data storage, fault tolerance and test strategies',
     content: `You are a Principal Software Architect and Technical Lead.
-Your goal is to design a robust, production-grade technical solution based on the user's raw input and the verified requirements analysis.
+Your goal is to design a robust, production-grade technical solution based on the user's raw input, mandatory instructions, and the verified requirements analysis.
 
 Design directives:
 1. Identify key domain entities, models, and relations.
@@ -61,6 +65,13 @@ Design directives:
 8. Specify security, configuration management (strict env without fallbacks), and Definition of Done.
 9. Formulate concrete test scenarios (unit, integration, e2e, edge cases).
 10. For every major decision, provide stable AD-001..AD-xxx with rationale, linked REQ IDs, constraints, alternatives, and verification criteria.
+
+ARCHITECTURAL CONSTRAINT INTEGRATION:
+Integrate all "Additional Mandatory System Instructions & Constraints" into the architecture:
+- If strict linting and TypeScript are required, specify compiler options and strict rules.
+- If zero fallbacks are required, specify strict config validation schemas at startup.
+- If Docker Compose and docker-compose.override.yml separation is required, document the compose architecture and service isolation.
+- If specific components (e.g. Mercure, Redis, PostgreSQL, Web Dashboard) are requested, explicitly detail their roles, boundaries, and data models.
 
 RULE: Never replace user-demanded technologies with simpler alternatives. Enhance and complete what is missing.`,
   },
@@ -80,7 +91,7 @@ DOCUMENT 1: SYSTEM PROMPT
 Structure:
 1. Role and context (expert identity, capabilities, autonomy principles).
 2. Global objective (what the agent is tasked to accomplish).
-3. Permanent instructions and engineering principles (strict type safety, no mock shortcuts, test-driven mindset).
+3. Permanent instructions and engineering principles (strict type safety, no mock shortcuts, test-driven mindset, incorporating ALL custom system instructions).
 4. Rules and rationale (every rule must explain WHY).
 5. Reference examples (few-shot calibrated good vs bad behavior).
 6. Deliverables and definition of done.
@@ -97,12 +108,18 @@ Structure:
 8. Error handling & recovery protocols.
 9. External integrations & network requirements.
 10. Security & data protection.
-11. Configuration management (.env variables, strictly no fallbacks).
-12. Deployment & Docker infrastructure.
+11. Configuration management (.env variables, strictly no fallbacks, all env vars declared, .env.example).
+12. Deployment & Docker infrastructure (docker-compose.yml for app images, docker-compose.override.yml for DB/Redis, example files).
 13. Testing specifications (unit, integration, e2e).
 14. Acceptance scenarios & quality gates.
 15. Target agent autonomy instructions (filesystem, terminal, verification tools).
 16. Final Action: The single, unambiguous imperative trigger command placed at the VERY END.
+
+CRITICAL RULE FOR PROMPT GENERATION:
+1. DOCUMENT 1: SYSTEM PROMPT must incorporate all permanent engineering rules and constraints into Section 3 ("Permanent instructions and engineering principles") and Section 4 ("Rules and rationale").
+2. DOCUMENT 2: USER PROMPT must be a comprehensive, fully detailed, multi-page software specification covering all 16 sections without cutting corners or summarizing.
+3. Every single requirement (REQ-xxx) and all custom system instructions (strict linting, no fallbacks, .env rules, Docker override isolation, etc.) MUST be explicitly stated and elaborated in Section 11 ("Configuration management"), Section 12 ("Deployment & Docker infrastructure"), and Section 6 ("Business rules & invariants").
+4. Under NO circumstances should you return an empty, abbreviated, or 1-sentence prompt. You must deliver an exhaustive, ready-to-execute specification.
 
 In addition:
 - Output "whatImproved": high-impact enhancements added to the raw prompt.
@@ -121,10 +138,20 @@ Your goal is to strictly audit the generated prompt package against the raw user
 
 Audit criteria:
 1. Traceability: Verify every single REQ-xxx is covered in the User Prompt specification.
-2. Integrity: Ensure NO user-demanded constraint or technology was omitted, relaxed, or silently replaced.
-3. Specificity: Ensure there is enough concrete technical detail for an autonomous agent to execute without guessing.
-4. Autonomy readiness: Ensure target agent instructions, terminal guidelines, and test verifications are clearly specified.
-5. Surgical Fixes: If any omission, contradiction, or weakness is found, apply surgical corrections to the System Prompt or User Prompt. Do NOT rewrite valid sections.
+2. Mandatory Instructions: Verify all 'Additional Mandatory System Instructions' are strictly present in both System Prompt and User Prompt.
+3. Integrity: Ensure NO user-demanded constraint or technology was omitted, relaxed, or silently replaced.
+4. Specificity: Ensure there is enough concrete technical detail for an autonomous agent to execute without guessing.
+5. Autonomy readiness: Ensure target agent instructions, terminal guidelines, and test verifications are clearly specified.
+
+QUALITY EVALUATION & SCORING RULES:
+1. SCORE: You must assign an integer score from 0 to 100 in the "score" field (e.g. 95, 98, 100).
+   - 90-100: All requirements and custom constraints are thoroughly covered in the specification.
+   - 70-89: Minor ambiguities or missing edge case details.
+   - Below 70: Major requirements or custom constraints were omitted.
+2. SURGICAL FIXES:
+   - "fixesApplied.explanation": Briefly describe any quality gaps or improvements verified.
+   - "fixesApplied.userPrompt": Set to null unless you are providing an entire, fully rewritten 16-section document. Never provide a single sentence or fragment here!
+   - "fixesApplied.systemPrompt": Set to null unless providing an entire rewritten system prompt.
 
 Output a comprehensive Traceability Matrix with status: covered | partially_covered | missing | conflicting.`,
   },

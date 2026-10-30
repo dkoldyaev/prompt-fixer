@@ -23,6 +23,14 @@ export interface LLMCallParams {
   systemPrompt: string;
   userInput: string;
   zodSchema?: z.ZodTypeAny;
+  reasoningEffort?: 'low' | 'medium' | 'high';
+}
+
+/**
+ * Checks whether a given model supports reasoning effort parameter.
+ */
+export function isReasoningModel(modelId: string): boolean {
+  return /^(gpt-6|gpt-5\.6|o1|o3)/i.test(modelId);
 }
 
 export interface LLMCallResult<T> {
@@ -99,22 +107,29 @@ export async function executeStructuredLLMCall<T>(
         ? zodResponseFormat(params.zodSchema, params.stage.replace(/[^a-zA-Z0-9_]/g, '_'))
         : { type: 'json_object' as const };
 
+      const isReasoning = isReasoningModel(params.modelId);
+      const requestPayload: any = {
+        model: params.modelId,
+        messages: [
+          {
+            role: 'system',
+            content: `${params.systemPrompt}\n\nIMPORTANT: You MUST respond strictly in valid JSON format matching the schema specification.`,
+          },
+          {
+            role: 'user',
+            content: `<user_untrusted_input>\n${params.userInput}\n</user_untrusted_input>`,
+          },
+        ],
+        response_format: responseFormat,
+        max_completion_tokens: config.AI_MAX_OUTPUT_TOKENS,
+      };
+
+      if (isReasoning) {
+        requestPayload.reasoning_effort = params.reasoningEffort || 'medium';
+      }
+
       const response = await client.chat.completions.create(
-        {
-          model: params.modelId,
-          messages: [
-            {
-              role: 'system',
-              content: `${params.systemPrompt}\n\nIMPORTANT: You MUST respond strictly in valid JSON format matching the schema specification. Return JSON object with keys: systemPrompt, userPrompt, whatImproved, assumptions, unresolvedQuestions.`,
-            },
-            {
-              role: 'user',
-              content: `<user_untrusted_input>\n${params.userInput}\n</user_untrusted_input>`,
-            },
-          ],
-          response_format: responseFormat,
-          max_tokens: config.AI_MAX_OUTPUT_TOKENS,
-        },
+        requestPayload,
         {
           timeout: config.AI_REQUEST_TIMEOUT_MS,
         }
@@ -163,6 +178,7 @@ export async function executeStructuredLLMCall<T>(
           inputTokens,
           outputTokens,
           cachedInputTokens: cachedTokens,
+          reasoningTokens: (usage as any)?.completion_tokens_details?.reasoning_tokens ?? 0,
           durationMs,
           costUsd,
           attempts,

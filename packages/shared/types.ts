@@ -226,4 +226,12 @@ export interface UserPreferences {
   customInstructions?: string;
   defaultMode: GenerationMode;
   defaultTarget: TargetEnvironment;
+  stageModels?: {
+    analyzer?: string;
+    architect?: string;
+    composer?: string;
+    reviewer?: string;
+    fast?: string;
+  };
+  reasoningEffort?: 'low' | 'medium' | 'high';
 }
