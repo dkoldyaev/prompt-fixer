@@ -45,7 +45,7 @@ export function buildTraceabilityMatrix(
 
     // Determine deterministic coverage
     let status: CoverageStatus = 'covered';
-    let reason: string | undefined = undefined;
+    let reason: string | null | undefined = undefined;
 
     // Check if key phrases or explicit tokens from description are present
     const words = req.description

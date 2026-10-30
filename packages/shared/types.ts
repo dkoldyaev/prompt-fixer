@@ -53,7 +53,7 @@ export const RequirementItemSchema = z.object({
   ]),
   criticality: z.enum(['critical', 'high', 'medium', 'low']),
   description: z.string(),
-  originalQuote: z.string().optional(),
+  originalQuote: z.string().nullable().optional(),
 });
 export type RequirementItem = z.infer<typeof RequirementItemSchema>;
 
@@ -112,7 +112,7 @@ export const TraceabilityItemSchema = z.object({
   priority: z.enum(['critical', 'high', 'medium', 'low']),
   coveredSections: z.array(z.string()),
   status: z.enum(['covered', 'partially_covered', 'missing', 'conflicting']),
-  reason: z.string().optional(),
+  reason: z.string().nullable().optional(),
 });
 export type TraceabilityItem = z.infer<typeof TraceabilityItemSchema>;
 
@@ -127,15 +127,16 @@ export const ReviewReportSchema = z.object({
     z.object({
       severity: z.enum(['critical', 'high', 'medium', 'low']),
       message: z.string(),
-      section: z.string().optional(),
+      section: z.string().nullable().optional(),
     })
   ),
   fixesApplied: z
     .object({
-      systemPrompt: z.string().optional(),
-      userPrompt: z.string().optional(),
-      explanation: z.string().optional(),
+      systemPrompt: z.string().nullable().optional(),
+      userPrompt: z.string().nullable().optional(),
+      explanation: z.string().nullable().optional(),
     })
+    .nullable()
     .optional(),
   summary: z.string(),
 });
