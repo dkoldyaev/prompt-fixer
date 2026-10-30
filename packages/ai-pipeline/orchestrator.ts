@@ -265,7 +265,57 @@ export class PipelineOrchestrator {
     const targetTemplate = getPromptTemplate(`target-${targetEnvironment}`, targetEnvironment);
 
     const composerSystem = `${composerTemplate?.content || ''}\n\n${targetTemplate?.content || ''}\nTarget Language: ${options.preferences?.targetLanguage || 'Russian'}\nDetail Level: ${options.preferences?.detailLevel || 'detailed'}`;
-    const composerInput = `Original Primary Request:\n${rawPrompt}\n\nAdditional Mandatory System Instructions & Constraints (CRUCIAL: MUST BE INTEGRATED IN FULL DETAIL INTO SYSTEM PROMPT AND USER PROMPT SPECIFICATION):\n${customInstructions || 'None specified'}\n\nRequirements Analysis:\n${JSON.stringify(analyzerResult.data, null, 2)}\n\nArchitecture Specification:\n${JSON.stringify(architectResult.data, null, 2)}`;
+    
+    // Synthesize structured input for the composer without unbounded JSON dumping
+    const reqSummary = analyzerResult.data.requirements
+      .map((r) => `- [${r.id}] ${r.title} (${r.category}, priority: ${r.priority}): ${r.description}`)
+      .join('\n');
+
+    const decisionsSummary = architectResult.data.decisions
+      .map((d) => `- [${d.id}] ${d.title}: ${d.description} (Rationale: ${d.rationale}, Criteria: ${d.verificationCriteria})`)
+      .join('\n');
+
+    const composerInput = `Original Primary Request:
+${rawPrompt}
+
+Additional Mandatory System Instructions & Constraints (CRUCIAL: MUST BE INTEGRATED IN FULL DETAIL INTO SYSTEM PROMPT AND USER PROMPT SPECIFICATION):
+${customInstructions || 'None specified'}
+
+Verified Requirements (${analyzerResult.data.requirements.length} items):
+${reqSummary}
+
+Architectural Overview:
+${architectResult.data.architectureOverview}
+
+Key Architectural Decisions:
+${decisionsSummary}
+
+Technology Stack:
+${architectResult.data.techStack.join(', ')}
+
+Domain Entities & Models:
+${architectResult.data.keyEntities.join(', ')}
+
+System Invariants:
+${architectResult.data.invariants.join('; ')}
+
+Component Boundaries & Interfaces:
+${architectResult.data.componentBoundaries.join('; ')}
+
+Storage & Persistence Strategy:
+${architectResult.data.dataStorageStrategy}
+
+Fault Tolerance & Error Recovery:
+${architectResult.data.errorRecoveryStrategy}
+
+Security & Access Control:
+${architectResult.data.securityRequirements.join('; ')}
+
+Verification & Test Scenarios:
+${architectResult.data.testScenarios.join('; ')}
+
+Definition of Done:
+${architectResult.data.definitionOfDone.join('; ')}`;
 
     const composerResult = await executeStructuredLLMCall<PromptPackage>(
       {
@@ -290,7 +340,20 @@ export class PipelineOrchestrator {
     notify('reviewing', 'quality_reviewer', 90, 'Этап 4/4: Аудит качества и проверка матрицы трассируемости (gpt-6.1-terra)...', cumulativeIntermediate);
     const reviewerTemplate = getPromptTemplate('quality-reviewer');
 
-    const reviewerInput = `Original Primary Request:\n${rawPrompt}\n\nAdditional Mandatory System Instructions:\n${customInstructions || 'None specified'}\n\nRequirements:\n${JSON.stringify(analyzerResult.data, null, 2)}\n\nSystem Prompt Generated:\n${composerResult.data.systemPrompt}\n\nUser Prompt Generated:\n${composerResult.data.userPrompt}`;
+    const reviewerInput = `Original Primary Request:
+${rawPrompt}
+
+Additional Mandatory System Instructions & Constraints:
+${customInstructions || 'None specified'}
+
+Requirements to verify (${analyzerResult.data.requirements.length} items):
+${reqSummary}
+
+Generated System Prompt:
+${composerResult.data.systemPrompt}
+
+Generated User Prompt (Specification):
+${composerResult.data.userPrompt}`;
 
     const reviewerResult = await executeStructuredLLMCall<ReviewReport>(
       {
