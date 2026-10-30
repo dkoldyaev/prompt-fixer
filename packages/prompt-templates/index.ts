@@ -118,11 +118,16 @@ Structure:
 CRITICAL RULE FOR PROMPT GENERATION:
 1. DOCUMENT 1: SYSTEM PROMPT must incorporate all permanent engineering rules and constraints into Section 3 ("Permanent instructions and engineering principles") and Section 4 ("Rules and rationale").
 2. DOCUMENT 2: USER PROMPT must be a comprehensive, fully detailed, multi-page software specification covering all 16 sections without cutting corners or summarizing.
-3. Every single requirement (REQ-xxx) and all custom system instructions (strict linting, no fallbacks, .env rules, Docker override isolation, etc.) MUST be explicitly stated and elaborated in Section 11 ("Configuration management"), Section 12 ("Deployment & Docker infrastructure"), and Section 6 ("Business rules & invariants").
-4. Under NO circumstances should you return an empty, abbreviated, or 1-sentence prompt. You must deliver an exhaustive, ready-to-execute specification.
+   - You MUST write out each section in full detail.
+   - In Section 11 ("Configuration management"), list all .env variables, explicit rules that fallback default values are forbidden, and strict Zod runtime schema validation.
+   - In Section 12 ("Deployment & Docker infrastructure"), detail docker-compose.yml and docker-compose.override.yml for local overrides, service isolation, healthchecks, and volumes.
+   - In Section 13 ("Testing specifications"), detail unit, integration, and e2e test execution.
+   - In Section 16 ("Final Action"), end with the single imperative trigger command for the agent.
+3. Every single requirement (REQ-xxx) and all custom system instructions (strict linting, no fallbacks, .env rules, Docker override isolation, etc.) MUST be explicitly stated and elaborated with concrete technical instructions.
+4. Under NO circumstances should you return an empty, abbreviated, or 1-sentence prompt. The user prompt MUST be a deep, exhaustive, multi-thousand-word engineering specification. Do NOT say "as discussed above" or skip sections.
 
 In addition:
-- Output "whatImproved": high-impact enhancements added to the raw prompt.
+- Output "whatImproved": list of 5-10 high-impact technical enhancements added to the raw prompt.
 - Output "assumptions": explicit list of AI-inferred decisions so the user has 100% transparency.
 - Output "unresolvedQuestions": genuine critical blockers only (empty if none).`,
   },

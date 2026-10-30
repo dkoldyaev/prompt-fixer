@@ -128,6 +128,8 @@ export async function executeStructuredLLMCall<T>(
         requestPayload.reasoning_effort = params.reasoningEffort || 'medium';
       }
 
+      console.log(`[AI LLM] Invoking stage "${params.stage}" with model "${params.modelId}" (attempt ${attempts}/${maxRetries + 1})...`);
+
       const response = await client.chat.completions.create(
         requestPayload,
         {
@@ -137,8 +139,13 @@ export async function executeStructuredLLMCall<T>(
 
       const choice = response.choices[0];
       const rawContent = choice?.message?.content;
+      console.log(`[AI LLM] Stage "${params.stage}" received response. Finish reason: ${choice?.finish_reason}, Refusal: ${choice?.message?.refusal || 'none'}, Content length: ${rawContent?.length || 0}`);
+
       if (!rawContent) {
-        throw new Error(`OpenAI returned empty response for stage: ${params.stage}`);
+        const errorDetail = choice?.message?.refusal 
+          ? `Model refused with message: ${choice.message.refusal}` 
+          : `Finish reason: ${choice?.finish_reason || 'unknown'}, choices: ${response.choices.length}`;
+        throw new Error(`OpenAI returned empty response for stage "${params.stage}". (${errorDetail})`);
       }
 
       const parsedJson = JSON.parse(rawContent);
@@ -162,6 +169,7 @@ export async function executeStructuredLLMCall<T>(
       }
 
       const validatedData = validator(normalizedJson);
+      console.log(`[AI LLM] Stage "${params.stage}" data successfully validated against Zod schema.`);
 
       const usage = response.usage;
       const inputTokens = usage?.prompt_tokens ?? Math.floor(params.userInput.length / 4);
@@ -187,6 +195,7 @@ export async function executeStructuredLLMCall<T>(
       };
     } catch (err: any) {
       lastError = err;
+      console.error(`[AI LLM ERROR] Stage "${params.stage}" attempt ${attempts} failed:`, err?.message || err);
       // If client abort or non-retryable 401/403, don't retry
       if (err?.status === 401 || err?.status === 403) {
         throw new Error(`OpenAI Authentication Error (${err.status}): ${err.message}`);
