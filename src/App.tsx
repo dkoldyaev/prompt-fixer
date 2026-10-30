@@ -39,6 +39,7 @@ export const App: React.FC = () => {
   const [copiedFloatingLink, setCopiedFloatingLink] = useState(false);
   const [editorDraftPrompt, setEditorDraftPrompt] = useState<string | undefined>(undefined);
   const [editorDraftTarget, setEditorDraftTarget] = useState<TargetEnvironment | undefined>(undefined);
+  const [editorDraftCustomInstructions, setEditorDraftCustomInstructions] = useState<string | undefined>(undefined);
 
   const eventSourceRef = useRef<EventSource | null>(null);
 
@@ -142,6 +143,13 @@ export const App: React.FC = () => {
       }
       if (job.targetEnvironment) {
         setEditorDraftTarget(job.targetEnvironment);
+      }
+      const customInstr =
+        job.intermediateResults?.preferences?.customInstructions ||
+        job.preferences?.customInstructions ||
+        '';
+      if (customInstr) {
+        setEditorDraftCustomInstructions(customInstr);
       }
 
       // If job is already completed
@@ -318,6 +326,9 @@ export const App: React.FC = () => {
       if (latestVer?.rawPrompt) {
         setEditorDraftPrompt(latestVer.rawPrompt);
         setEditorDraftTarget(latestVer.targetEnvironment);
+        if (latestVer.settings?.customInstructions) {
+          setEditorDraftCustomInstructions(latestVer.settings.customInstructions);
+        }
       } else if (data.project?.title) {
         setEditorDraftPrompt(data.project.title);
       }
@@ -589,6 +600,7 @@ export const App: React.FC = () => {
   const handleNewPrompt = () => {
     setEditorDraftPrompt('');
     setEditorDraftTarget(undefined);
+    setEditorDraftCustomInstructions('');
     setCurrentProject(null);
     setProjectVersions([]);
     setActiveJobId(null);
@@ -791,6 +803,7 @@ export const App: React.FC = () => {
                           isLoading={isExecuting}
                           initialPrompt={editorDraftPrompt}
                           initialTarget={editorDraftTarget}
+                          initialCustomInstructions={editorDraftCustomInstructions}
                         />
                       </div>
                     ) : (

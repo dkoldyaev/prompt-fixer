@@ -29,6 +29,7 @@ interface PromptCreatorProps {
   isLoading: boolean;
   initialPrompt?: string;
   initialTarget?: TargetEnvironment;
+  initialCustomInstructions?: string;
 }
 
 const PRESETS = [
@@ -59,6 +60,7 @@ export const PromptCreator: React.FC<PromptCreatorProps> = ({
   isLoading,
   initialPrompt,
   initialTarget,
+  initialCustomInstructions,
 }) => {
   const [rawPrompt, setRawPrompt] = useState<string>(() => {
     return initialPrompt || localStorage.getItem('ai_prompt_rewriter_draft') || '';
@@ -79,12 +81,24 @@ export const PromptCreator: React.FC<PromptCreatorProps> = ({
       setTargetEnvironment(initialTarget);
     }
   }, [initialTarget]);
+
   const [generationMode, setGenerationMode] = useState<GenerationMode>('adaptive');
   const [targetLanguage, setTargetLanguage] = useState<string>('ru');
   const [detailLevel, setDetailLevel] = useState<DetailLevel>('detailed');
   const [includeArchitecturalAdditions, setIncludeArchitecturalAdditions] = useState<boolean>(true);
   const [includeExplanations, setIncludeExplanations] = useState<boolean>(true);
-  const [customInstructions, setCustomInstructions] = useState<string>('');
+  const [customInstructions, setCustomInstructions] = useState<string>(() => {
+    return initialCustomInstructions || '';
+  });
+
+  useEffect(() => {
+    if (initialCustomInstructions !== undefined) {
+      setCustomInstructions(initialCustomInstructions);
+      if (initialCustomInstructions.trim().length > 0) {
+        setShowAdvanced(true);
+      }
+    }
+  }, [initialCustomInstructions]);
   const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
   const [complexity, setComplexity] = useState<ComplexityAssessment | null>(null);
 
