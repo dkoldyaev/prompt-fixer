@@ -27,6 +27,8 @@ export const App: React.FC = () => {
   const [templatesList, setTemplatesList] = useState<PromptTemplateDefinition[]>([]);
   const [isRevising, setIsRevising] = useState<boolean>(false);
   const [copiedFloatingLink, setCopiedFloatingLink] = useState(false);
+  const [editorDraftPrompt, setEditorDraftPrompt] = useState<string | undefined>(undefined);
+  const [editorDraftTarget, setEditorDraftTarget] = useState<TargetEnvironment | undefined>(undefined);
 
   const eventSourceRef = useRef<EventSource | null>(null);
 
@@ -115,18 +117,77 @@ export const App: React.FC = () => {
 
       // If job is already completed
       if (job.status === 'completed') {
-        if (job.projectId) {
+        let loadedProject = job.project || null;
+        let loadedVersions: VersionEntity[] = job.versions || [];
+
+        if (job.projectId && (!loadedVersions || loadedVersions.length === 0)) {
           const pRes = await fetch(`/api/projects/${job.projectId}`);
           if (pRes.ok) {
             const pData = await pRes.json();
-            setCurrentProject(pData.project);
-            setProjectVersions(pData.versions);
-            setActiveVersionIndex(Math.max(0, pData.versions.length - 1));
-            setActiveTab('create');
-            setIsExecuting(false);
-            return;
+            loadedProject = pData.project;
+            loadedVersions = pData.versions;
           }
         }
+
+        // If still no versions, synthesize one from intermediateResults
+        if (!loadedVersions || loadedVersions.length === 0) {
+          const composer = job.intermediateResults?.composer;
+          const analyzer = job.intermediateResults?.analyzer;
+          const architect = job.intermediateResults?.architect;
+          const reviewReport = job.intermediateResults?.reviewReport;
+
+          const rawPrompt =
+            job.rawPrompt ||
+            job.intermediateResults?.rawPrompt ||
+            (analyzer?.requirements?.map((r: any) => r.originalQuote).filter(Boolean).join('\n') ||
+              analyzer?.userGoal ||
+              'Генерация ' + job.id);
+
+          const synthVersion: VersionEntity = {
+            id: `v_${job.id}`,
+            projectId: job.projectId || `proj_${job.id}`,
+            versionNumber: 1,
+            rawPrompt,
+            targetEnvironment: job.targetEnvironment,
+            generationMode: job.generationMode,
+            settings: job.intermediateResults?.preferences || {},
+            systemPrompt: composer?.systemPrompt || '',
+            userPrompt: composer?.userPrompt || '',
+            whatImproved: composer?.whatImproved || [],
+            assumptions: composer?.assumptions || [],
+            unresolvedQuestions: composer?.unresolvedQuestions || [],
+            reviewReport: reviewReport || {
+              isApproved: true,
+              score: 95,
+              traceability: [],
+              critique: [],
+              fixesApplied: null,
+              summary: 'Синтезировано из результатов генерации',
+            },
+            requirements: analyzer,
+            architecturalDecisions: architect,
+            totalTokens: job.totalTokens,
+            totalCostUsd: job.totalCostUsd,
+            createdAt: job.createdAt,
+          };
+
+          loadedVersions = [synthVersion];
+          if (!loadedProject) {
+            loadedProject = {
+              id: synthVersion.projectId,
+              title: analyzer?.userGoal || 'Проект ' + job.id,
+              createdAt: job.createdAt,
+              updatedAt: job.updatedAt,
+            };
+          }
+        }
+
+        setCurrentProject(loadedProject);
+        setProjectVersions(loadedVersions);
+        setActiveVersionIndex(Math.max(0, loadedVersions.length - 1));
+        setActiveTab('create');
+        setIsExecuting(false);
+        return;
       }
 
       // If job is in progress
@@ -425,6 +486,8 @@ export const App: React.FC = () => {
   };
 
   const handleNewPrompt = () => {
+    setEditorDraftPrompt('');
+    setEditorDraftTarget(undefined);
     setCurrentProject(null);
     setProjectVersions([]);
     setActiveJobId(null);
@@ -490,6 +553,14 @@ export const App: React.FC = () => {
                       },
                     });
                   }}
+                  onEditPromptInCreator={(rawPrompt) => {
+                    setEditorDraftPrompt(rawPrompt);
+                    setEditorDraftTarget(activeVersion.targetEnvironment);
+                    setCurrentProject(null);
+                    setProjectVersions([]);
+                    setActiveJobId(null);
+                    window.history.pushState(null, '', '/');
+                  }}
                   isRevising={isRevising}
                 />
               </div>
@@ -507,7 +578,12 @@ export const App: React.FC = () => {
                   </p>
                 </div>
 
-                <PromptCreator onGenerate={handleGenerate} isLoading={isExecuting} />
+                <PromptCreator
+                  onGenerate={handleGenerate}
+                  isLoading={isExecuting}
+                  initialPrompt={editorDraftPrompt}
+                  initialTarget={editorDraftTarget}
+                />
               </div>
             )}
           </div>

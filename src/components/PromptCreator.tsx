@@ -27,6 +27,8 @@ interface PromptCreatorProps {
     };
   }) => void;
   isLoading: boolean;
+  initialPrompt?: string;
+  initialTarget?: TargetEnvironment;
 }
 
 const PRESETS = [
@@ -52,12 +54,31 @@ const PRESETS = [
   },
 ];
 
-export const PromptCreator: React.FC<PromptCreatorProps> = ({ onGenerate, isLoading }) => {
+export const PromptCreator: React.FC<PromptCreatorProps> = ({
+  onGenerate,
+  isLoading,
+  initialPrompt,
+  initialTarget,
+}) => {
   const [rawPrompt, setRawPrompt] = useState<string>(() => {
-    return localStorage.getItem('ai_prompt_rewriter_draft') || '';
+    return initialPrompt || localStorage.getItem('ai_prompt_rewriter_draft') || '';
   });
 
-  const [targetEnvironment, setTargetEnvironment] = useState<TargetEnvironment>('google-antigravity');
+  const [targetEnvironment, setTargetEnvironment] = useState<TargetEnvironment>(
+    initialTarget || 'google-antigravity'
+  );
+
+  useEffect(() => {
+    if (initialPrompt !== undefined) {
+      setRawPrompt(initialPrompt);
+    }
+  }, [initialPrompt]);
+
+  useEffect(() => {
+    if (initialTarget !== undefined) {
+      setTargetEnvironment(initialTarget);
+    }
+  }, [initialTarget]);
   const [generationMode, setGenerationMode] = useState<GenerationMode>('adaptive');
   const [targetLanguage, setTargetLanguage] = useState<string>('ru');
   const [detailLevel, setDetailLevel] = useState<DetailLevel>('detailed');

@@ -123,13 +123,25 @@ app.post('/api/jobs', async (req: Request, res: Response) => {
   const storage = await getStorage();
   const jobId = `job_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
+  let targetProjectId = parsed.data.projectId;
+  if (!targetProjectId) {
+    const titleSnippet =
+      parsed.data.rawPrompt.slice(0, 45).replace(/\n/g, ' ') + (parsed.data.rawPrompt.length > 45 ? '...' : '');
+    const newProj = await storage.createProject(titleSnippet);
+    targetProjectId = newProj.id;
+  }
+
   const job = await storage.createJob({
     id: jobId,
-    projectId: parsed.data.projectId,
+    projectId: targetProjectId,
     targetEnvironment: parsed.data.targetEnvironment,
     generationMode: parsed.data.generationMode,
     status: 'queued',
     currentStep: 'queued',
+    intermediateResults: {
+      rawPrompt: parsed.data.rawPrompt,
+      preferences: parsed.data.preferences || {},
+    },
     totalTokens: 0,
     totalCostUsd: 0,
     cancelRequested: false,
@@ -155,20 +167,24 @@ app.post('/api/jobs', async (req: Request, res: Response) => {
             totalCostUsd: event.metrics?.totalCostUsd ?? null,
           };
           if (event.intermediateResults !== undefined) {
-            updateData.intermediateResults = event.intermediateResults;
+            updateData.intermediateResults = {
+              ...event.intermediateResults,
+              rawPrompt: parsed.data.rawPrompt,
+              preferences: parsed.data.preferences || {},
+            };
           }
           await storage.updateJob(jobId, updateData);
           broadcastJobEvent(jobId, event);
         },
       });
 
-      // Automatically create or update project version if projectId provided
-      if (parsed.data.projectId) {
-        const existingVersions = await storage.getVersionsForProject(parsed.data.projectId);
+      // Automatically create or update project version
+      if (targetProjectId) {
+        const existingVersions = await storage.getVersionsForProject(targetProjectId);
         const versionNumber = existingVersions.length + 1;
 
         await storage.createVersion({
-          projectId: parsed.data.projectId,
+          projectId: targetProjectId,
           versionNumber,
           rawPrompt: parsed.data.rawPrompt,
           targetEnvironment: parsed.data.targetEnvironment,
@@ -243,7 +259,73 @@ app.get('/api/jobs/:id', async (req: Request, res: Response) => {
   if (!job) {
     return res.status(404).json({ error: 'Задание не найдено' });
   }
-  res.json(job);
+
+  let project = null;
+  let versions: any[] = [];
+
+  if (job.projectId) {
+    project = await storage.getProject(job.projectId);
+    versions = await storage.getVersionsForProject(job.projectId);
+  }
+
+  // If completed and no versions found in DB (e.g. ad-hoc job), synthesize from intermediateResults
+  if (job.status === 'completed' && versions.length === 0) {
+    const composer = job.intermediateResults?.composer;
+    const analyzer = job.intermediateResults?.analyzer;
+    const architect = job.intermediateResults?.architect;
+    const reviewReport = job.intermediateResults?.reviewReport;
+
+    const rawPrompt =
+      job.intermediateResults?.rawPrompt ||
+      (analyzer?.requirements?.map((r: any) => r.originalQuote).filter(Boolean).join('\n') ||
+        analyzer?.userGoal ||
+        'Исходный запрос генерации');
+
+    const synthVersion = {
+      id: `v_${job.id}`,
+      projectId: job.projectId || `proj_${job.id}`,
+      versionNumber: 1,
+      rawPrompt,
+      targetEnvironment: job.targetEnvironment,
+      generationMode: job.generationMode,
+      settings: job.intermediateResults?.preferences || {},
+      systemPrompt: composer?.systemPrompt || '',
+      userPrompt: composer?.userPrompt || '',
+      whatImproved: composer?.whatImproved || [],
+      assumptions: composer?.assumptions || [],
+      unresolvedQuestions: composer?.unresolvedQuestions || [],
+      reviewReport: reviewReport || {
+        isApproved: true,
+        score: 95,
+        traceability: [],
+        critique: [],
+        fixesApplied: null,
+        summary: 'Синтезировано из результатов генерации',
+      },
+      requirements: analyzer,
+      architecturalDecisions: architect,
+      totalTokens: job.totalTokens,
+      totalCostUsd: job.totalCostUsd,
+      createdAt: job.createdAt,
+    };
+
+    versions = [synthVersion];
+
+    if (!project) {
+      project = {
+        id: synthVersion.projectId,
+        title: analyzer?.userGoal || 'Проект ' + job.id,
+        createdAt: job.createdAt,
+        updatedAt: job.updatedAt,
+      };
+    }
+  }
+
+  res.json({
+    ...job,
+    project,
+    versions,
+  });
 });
 
 app.get('/api/jobs/:id/events', async (req: Request, res: Response) => {
