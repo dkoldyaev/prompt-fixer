@@ -1,209 +1,339 @@
 import React, { useState, useEffect } from 'react';
-import { Copy, Check, ArrowRight, Loader2, Sparkles } from 'lucide-react';
-
-interface ModelItem {
-  id: string;
-  name: string;
-}
-
-const LANGUAGES = [
-  { id: 'ru', name: 'Русский' },
-  { id: 'en', name: 'English' },
-  { id: 'es', name: 'Español' },
-  { id: 'de', name: 'Deutsch' },
-  { id: 'fr', name: 'Français' },
-  { id: 'zh', name: '中文' },
-];
+import { Navbar, ActiveTab } from './components/Navbar';
+import { PromptCreator } from './components/PromptCreator';
+import { ExecutionModal } from './components/ExecutionModal';
+import { ResultView } from './components/ResultView';
+import { HistoryView } from './components/HistoryView';
+import { TemplatesView } from './components/TemplatesView';
+import { SettingsView } from './components/SettingsView';
+import { TargetEnvironment, GenerationMode, DetailLevel, JobProgressEvent } from '../packages/shared/types';
+import { ProjectEntity, VersionEntity } from '../server/database';
+import { PromptTemplateDefinition } from '../packages/prompt-templates';
 
 export const App: React.FC = () => {
-  const [inputPrompt, setInputPrompt] = useState('');
-  const [outputPrompt, setOutputPrompt] = useState('');
-  const [availableModels, setAvailableModels] = useState<ModelItem[]>([]);
-  const [selectedModel, setSelectedModel] = useState<string>('gemini');
-  const [selectedLanguage, setSelectedLanguage] = useState<string>('ru');
-  const [isLoading, setIsLoading] = useState(false);
-  const [isCopied, setIsCopied] = useState(false);
+  const [activeTab, setActiveTab] = useState<ActiveTab>('create');
+  const [isExecuting, setIsExecuting] = useState<boolean>(false);
+  const [executionEvent, setExecutionEvent] = useState<JobProgressEvent | null>(null);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
 
-  // Загрузка доступных моделей с сервера (только те, для которых есть ключи)
+  // Active Project & Versions
+  const [currentProject, setCurrentProject] = useState<ProjectEntity | null>(null);
+  const [projectVersions, setProjectVersions] = useState<VersionEntity[]>([]);
+  const [activeVersionIndex, setActiveVersionIndex] = useState<number>(0);
+
+  // History & Templates Data
+  const [projectsList, setProjectsList] = useState<any[]>([]);
+  const [templatesList, setTemplatesList] = useState<PromptTemplateDefinition[]>([]);
+  const [isRevising, setIsRevising] = useState<boolean>(false);
+
+  // Load projects and templates on mount
+  const loadProjects = async () => {
+    try {
+      const res = await fetch('/api/projects');
+      if (res.ok) {
+        const data = await res.json();
+        setProjectsList(data.projects || []);
+      }
+    } catch (err) {
+      console.warn('Failed to fetch projects:', err);
+    }
+  };
+
+  const loadTemplates = async () => {
+    try {
+      const res = await fetch('/api/templates');
+      if (res.ok) {
+        const data = await res.json();
+        setTemplatesList(data.templates || []);
+      }
+    } catch (err) {
+      console.warn('Failed to fetch templates:', err);
+    }
+  };
+
   useEffect(() => {
-    fetch('/api/models')
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.models && data.models.length > 0) {
-          setAvailableModels(data.models);
-          setSelectedModel(data.models[0].id);
-        }
-      })
-      .catch((err) => console.warn('Failed to load models:', err));
+    loadProjects();
+    loadTemplates();
   }, []);
 
-  const handleRewrite = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!inputPrompt.trim() || isLoading) return;
+  // Handle Prompt Generation Trigger
+  const handleGenerate = async (params: {
+    rawPrompt: string;
+    targetEnvironment: TargetEnvironment;
+    generationMode: GenerationMode;
+    preferences: {
+      targetLanguage: string;
+      detailLevel: DetailLevel;
+      includeArchitecturalAdditions: boolean;
+      includeExplanations: boolean;
+      customInstructions?: string;
+    };
+  }) => {
+    setIsExecuting(true);
+    setExecutionEvent({
+      jobId: 'init',
+      status: 'queued',
+      progressPercent: 5,
+      message: 'Инициализация задания...',
+    });
 
-    setIsLoading(true);
     try {
-      const res = await fetch('/api/rewrite', {
+      // 1. Create or determine project
+      let projectId = currentProject?.id;
+      if (!projectId) {
+        const titleSnippet =
+          params.rawPrompt.slice(0, 45).replace(/\n/g, ' ') + (params.rawPrompt.length > 45 ? '...' : '');
+        const projRes = await fetch('/api/projects', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: titleSnippet }),
+        });
+        if (projRes.ok) {
+          const newProj = await projRes.json();
+          setCurrentProject(newProj);
+          projectId = newProj.id;
+        }
+      }
+
+      // 2. Launch Job
+      const jobRes = await fetch('/api/jobs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          rawPrompt: inputPrompt,
-          targetModel: selectedModel,
-          targetLanguage: selectedLanguage,
+          rawPrompt: params.rawPrompt,
+          targetEnvironment: params.targetEnvironment,
+          generationMode: params.generationMode,
+          projectId,
+          preferences: params.preferences,
         }),
       });
 
-      const data = await res.json();
-      if (data.rewrittenPrompt) {
-        setOutputPrompt(data.rewrittenPrompt);
+      if (!jobRes.ok) {
+        const err = await jobRes.json();
+        throw new Error(err.error || 'Failed to start job');
+      }
+
+      const { jobId } = await jobRes.json();
+      setActiveJobId(jobId);
+
+      // 3. Connect to SSE Stream
+      const eventSource = new EventSource(`/api/jobs/${jobId}/events`);
+
+      eventSource.onmessage = async (e) => {
+        try {
+          const progress: JobProgressEvent = JSON.parse(e.data);
+          setExecutionEvent(progress);
+
+          if (progress.status === 'completed' || progress.status === 'failed' || progress.status === 'cancelled') {
+            eventSource.close();
+
+            if (progress.status === 'completed' && projectId) {
+              // Reload project versions
+              const pRes = await fetch(`/api/projects/${projectId}`);
+              if (pRes.ok) {
+                const pData = await pRes.json();
+                setCurrentProject(pData.project);
+                setProjectVersions(pData.versions);
+                setActiveVersionIndex(pData.versions.length - 1);
+              }
+              loadProjects();
+            }
+          }
+        } catch (parseErr) {
+          console.warn('Failed to parse SSE event:', parseErr);
+        }
+      };
+
+      eventSource.onerror = () => {
+        eventSource.close();
+      };
+    } catch (err: any) {
+      setExecutionEvent({
+        jobId: 'error',
+        status: 'failed',
+        progressPercent: 100,
+        message: err.message,
+        error: err.message,
+      });
+    }
+  };
+
+  const handleCancelJob = async () => {
+    if (activeJobId) {
+      await fetch(`/api/jobs/${activeJobId}/cancel`, { method: 'POST' });
+    }
+  };
+
+  const handleApplyRevision = async (instruction: string) => {
+    if (!currentProject) return;
+    setIsRevising(true);
+    try {
+      const res = await fetch(`/api/projects/${currentProject.id}/revision`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instruction }),
+      });
+      if (res.ok) {
+        // Refresh project versions
+        const pRes = await fetch(`/api/projects/${currentProject.id}`);
+        if (pRes.ok) {
+          const pData = await pRes.json();
+          setProjectVersions(pData.versions);
+          setActiveVersionIndex(pData.versions.length - 1);
+        }
+        loadProjects();
+      }
+    } finally {
+      setIsRevising(false);
+    }
+  };
+
+  const handleSelectProject = async (projectId: string) => {
+    try {
+      const res = await fetch(`/api/projects/${projectId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setCurrentProject(data.project);
+        setProjectVersions(data.versions);
+        setActiveVersionIndex(data.versions.length - 1);
+        setActiveTab('create');
       }
     } catch (err) {
-      console.error('Rewrite failed:', err);
-    } finally {
-      setIsLoading(false);
+      console.warn('Failed to load project:', err);
     }
   };
 
-  const handleCopy = async () => {
-    if (!outputPrompt) return;
-    try {
-      await navigator.clipboard.writeText(outputPrompt);
-      setIsCopied(true);
-      setTimeout(() => setIsCopied(false), 2000);
-    } catch (err) {
-      console.error('Copy failed:', err);
+  const handleDeleteProject = async (projectId: string) => {
+    if (confirm('Вы уверены, что хотите удалить этот проект и все его версии?')) {
+      await fetch(`/api/projects/${projectId}`, { method: 'DELETE' });
+      if (currentProject?.id === projectId) {
+        setCurrentProject(null);
+        setProjectVersions([]);
+      }
+      loadProjects();
     }
   };
+
+  const handleRenameProject = async (projectId: string, newTitle: string) => {
+    await fetch(`/api/projects/${projectId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: newTitle }),
+    });
+    loadProjects();
+  };
+
+  const handleSaveTemplate = async (template: PromptTemplateDefinition) => {
+    await fetch(`/api/templates/${template.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(template),
+    });
+    loadTemplates();
+  };
+
+  const activeVersion = projectVersions[activeVersionIndex];
+  const previousVersion = activeVersionIndex > 0 ? projectVersions[activeVersionIndex - 1] : undefined;
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center p-4 sm:p-8 font-sans selection:bg-blue-600 selection:text-white">
-      <div className="w-full max-w-3xl space-y-6 my-auto py-6">
-        {/* Заголовок */}
-        <div className="flex items-center justify-between pb-4 border-b border-slate-800">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white shadow-md shadow-blue-600/30">
-              <Sparkles className="w-4 h-4" />
-            </div>
-            <h1 className="text-xl font-bold tracking-tight text-white">Prompt Fixer</h1>
-          </div>
-          <span className="text-xs text-slate-400 font-mono">2-Tier Architecture</span>
-        </div>
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-indigo-500/30 selection:text-indigo-200">
+      {/* Top Navbar */}
+      <Navbar
+        activeTab={activeTab}
+        onSelectTab={setActiveTab}
+        activeProjectTitle={currentProject?.title}
+        versionNumber={activeVersion?.versionNumber}
+      />
 
-        {/* Форма */}
-        <form onSubmit={handleRewrite} className="space-y-4">
-          {/* Панель настроек: Модель и Язык */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {/* Селектор модели (только те, для которых есть ключи) */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                Модель
-              </label>
-              <select
-                value={selectedModel}
-                onChange={(e) => setSelectedModel(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-              >
-                {availableModels.length > 0 ? (
-                  availableModels.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name}
-                    </option>
-                  ))
-                ) : (
-                  <option value="gemini">Gemini</option>
-                )}
-              </select>
-            </div>
+      {/* Main Content Area */}
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {activeTab === 'create' && (
+          <div className="space-y-8 animate-fade-in">
+            {activeVersion ? (
+              <div className="space-y-6">
+                <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+                  <div>
+                    <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
+                      {currentProject?.title}
+                    </h1>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Спецификация и System Prompt для целевого AI-агента
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setCurrentProject(null);
+                      setProjectVersions([]);
+                    }}
+                    className="px-4 py-2 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 rounded-xl text-xs font-semibold transition-colors"
+                  >
+                    + Новый промпт
+                  </button>
+                </div>
 
-            {/* Выбор языка */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                Язык вывода
-              </label>
-              <select
-                value={selectedLanguage}
-                onChange={(e) => setSelectedLanguage(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 transition"
-              >
-                {LANGUAGES.map((lang) => (
-                  <option key={lang.id} value={lang.id}>
-                    {lang.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          {/* Поле ввода */}
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-              Исходный промпт
-            </label>
-            <textarea
-              value={inputPrompt}
-              onChange={(e) => setInputPrompt(e.target.value)}
-              placeholder="Введите сюда ваш черновой промпт..."
-              rows={6}
-              className="w-full bg-slate-900 border border-slate-800 rounded-xl p-4 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition leading-relaxed resize-y"
-            />
-          </div>
-
-          {/* Кнопка отправки */}
-          <button
-            type="submit"
-            disabled={!inputPrompt.trim() || isLoading}
-            className={`w-full py-3 px-5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition duration-150 shadow-md ${
-              !inputPrompt.trim() || isLoading
-                ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700/50'
-                : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-600/30'
-            }`}
-          >
-            {isLoading ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span>Переписываю по правилам...</span>
-              </>
+                <ResultView
+                  version={activeVersion}
+                  previousVersion={previousVersion}
+                  onApplyRevision={handleApplyRevision}
+                  onRegenerate={() => {
+                    handleGenerate({
+                      rawPrompt: activeVersion.rawPrompt,
+                      targetEnvironment: activeVersion.targetEnvironment,
+                      generationMode: activeVersion.generationMode,
+                      preferences: {
+                        targetLanguage: activeVersion.settings?.targetLanguage || 'ru',
+                        detailLevel: activeVersion.settings?.detailLevel || 'detailed',
+                        includeArchitecturalAdditions: true,
+                        includeExplanations: true,
+                      },
+                    });
+                  }}
+                  isRevising={isRevising}
+                />
+              </div>
             ) : (
-              <>
-                <span>Переписать</span>
-                <ArrowRight className="w-4 h-4" />
-              </>
+              <div className="max-w-4xl mx-auto space-y-6">
+                <div className="text-center space-y-2 mb-8">
+                  <h1 className="text-2xl sm:text-4xl font-extrabold text-white tracking-tight">
+                    Превратите идею в{' '}
+                    <span className="bg-gradient-to-r from-indigo-400 via-violet-400 to-amber-300 bg-clip-text text-transparent">
+                      безупречное ТЗ
+                    </span>
+                  </h1>
+                  <p className="text-sm text-slate-400 max-w-xl mx-auto">
+                    Глубокий анализ требований, выявление архитектурных пробелов, синтез инвариантов и подготовка System & User промптов для AI-агентов.
+                  </p>
+                </div>
+
+                <PromptCreator onGenerate={handleGenerate} isLoading={isExecuting} />
+              </div>
             )}
-          </button>
-        </form>
-
-        {/* Результат */}
-        {outputPrompt && (
-          <div className="space-y-2 pt-2 animate-fade-in">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                Отредактированный промпт
-              </label>
-              <button
-                type="button"
-                onClick={handleCopy}
-                className="flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 transition py-1 px-2.5 rounded-lg hover:bg-blue-500/10"
-              >
-                {isCopied ? (
-                  <>
-                    <Check className="w-3.5 h-3.5 text-emerald-400" />
-                    <span className="text-emerald-400">Скопировано!</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3.5 h-3.5" />
-                    <span>Скопировать</span>
-                  </>
-                )}
-              </button>
-            </div>
-
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 font-sans text-sm text-slate-200 leading-relaxed whitespace-pre-wrap max-h-[550px] overflow-y-auto">
-              {outputPrompt}
-            </div>
           </div>
         )}
-      </div>
+
+        {activeTab === 'history' && (
+          <HistoryView
+            projects={projectsList}
+            onSelectProject={handleSelectProject}
+            onDeleteProject={handleDeleteProject}
+            onRenameProject={handleRenameProject}
+          />
+        )}
+
+        {activeTab === 'templates' && (
+          <TemplatesView templates={templatesList} onSaveTemplate={handleSaveTemplate} />
+        )}
+
+        {activeTab === 'settings' && <SettingsView />}
+      </main>
+
+      {/* Execution Progress Modal */}
+      <ExecutionModal
+        isOpen={isExecuting}
+        event={executionEvent}
+        onCancel={handleCancelJob}
+        onClose={() => setIsExecuting(false)}
+      />
     </div>
   );
 };
