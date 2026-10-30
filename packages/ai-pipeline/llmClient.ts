@@ -80,7 +80,10 @@ export async function executeStructuredLLMCall<T>(
         {
           model: params.modelId,
           messages: [
-            { role: 'system', content: params.systemPrompt },
+            {
+              role: 'system',
+              content: `${params.systemPrompt}\n\nIMPORTANT: You MUST respond strictly in valid JSON format matching the schema specification.`,
+            },
             {
               role: 'user',
               content: `<user_untrusted_input>\n${params.userInput}\n</user_untrusted_input>`,
