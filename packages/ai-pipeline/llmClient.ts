@@ -110,7 +110,7 @@ export async function executeStructuredLLMCall<T>(
 
   const client = new OpenAI({
     apiKey: config.OPENAI_API_KEY,
-    timeout: config.AI_REQUEST_TIMEOUT_MS,
+    timeout: HTTP_TIMEOUT_MS,
     fetch: undiciFetch as any,
     fetchOptions: {
       dispatcher: undiciAgent,
@@ -152,7 +152,7 @@ export async function executeStructuredLLMCall<T>(
       const response = await client.chat.completions.create(
         requestPayload,
         {
-          timeout: config.AI_REQUEST_TIMEOUT_MS,
+          timeout: HTTP_TIMEOUT_MS,
         }
       );
 
