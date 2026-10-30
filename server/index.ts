@@ -148,13 +148,16 @@ app.post('/api/jobs', async (req: Request, res: Response) => {
         preferences: parsed.data.preferences,
         checkCancelled: () => activeJobCancellations.has(jobId),
         onProgress: async (event: JobProgressEvent) => {
-          await storage.updateJob(jobId, {
+          const updateData: any = {
             status: event.status,
             currentStep: event.currentStep,
-            intermediateResults: event.intermediateResults,
             totalTokens: event.metrics?.totalTokens || 0,
             totalCostUsd: event.metrics?.totalCostUsd ?? null,
-          });
+          };
+          if (event.intermediateResults !== undefined) {
+            updateData.intermediateResults = event.intermediateResults;
+          }
+          await storage.updateJob(jobId, updateData);
           broadcastJobEvent(jobId, event);
         },
       });

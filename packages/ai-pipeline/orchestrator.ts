@@ -205,6 +205,7 @@ export class PipelineOrchestrator {
     // -------------------------------------------------------------
     // QUALITY MODE PIPELINE (4 STAGES)
     // -------------------------------------------------------------
+    const cumulativeIntermediate: any = {};
 
     // STAGE 1: REQUIREMENTS ANALYZER
     notify('analyzing', 'requirements_analysis', 15, 'Этап 1/4: Детальный анализ и категоризация требований (gpt-6.1-terra)...');
@@ -228,14 +229,13 @@ export class PipelineOrchestrator {
     );
 
     recordMetrics(analyzerResult.metrics);
-    notify('analyzing', 'requirements_analysis_done', 30, 'Анализ требований завершен', {
-      analyzer: analyzerResult.data,
-    });
+    cumulativeIntermediate.analyzer = analyzerResult.data;
+    notify('analyzing', 'requirements_analysis_done', 30, 'Анализ требований завершен', cumulativeIntermediate);
 
     if (isCancelled()) throw new Error('JOB_CANCELLED');
 
     // STAGE 2: SOLUTION ARCHITECT
-    notify('architecting', 'solution_architecture', 45, 'Этап 2/4: Архитектурное моделирование и инварианты (gpt-6.1-sol)...');
+    notify('architecting', 'solution_architecture', 45, 'Этап 2/4: Архитектурное моделирование и инварианты (gpt-6.1-sol)...', cumulativeIntermediate);
     const architectTemplate = getPromptTemplate('solution-architect');
 
     const architectInput = `Original Primary Request:\n${rawPrompt}\n\nMandatory System Instructions & Constraints:\n${customInstructions || 'None specified'}\n\nRequirements Analysis:\n${JSON.stringify(analyzerResult.data, null, 2)}`;
@@ -254,15 +254,13 @@ export class PipelineOrchestrator {
     );
 
     recordMetrics(architectResult.metrics);
-    notify('architecting', 'solution_architecture_done', 60, 'Архитектурное решение сформировано', {
-      analyzer: analyzerResult.data,
-      architect: architectResult.data,
-    });
+    cumulativeIntermediate.architect = architectResult.data;
+    notify('architecting', 'solution_architecture_done', 60, 'Архитектурное решение сформировано', cumulativeIntermediate);
 
     if (isCancelled()) throw new Error('JOB_CANCELLED');
 
     // STAGE 3: PROMPT COMPOSER
-    notify('composing', 'prompt_composer', 75, 'Этап 3/4: Компоновка System Prompt и User Prompt ТЗ (gpt-6.1-sol)...');
+    notify('composing', 'prompt_composer', 75, 'Этап 3/4: Компоновка System Prompt и User Prompt ТЗ (gpt-6.1-sol)...', cumulativeIntermediate);
     const composerTemplate = getPromptTemplate('prompt-composer');
     const targetTemplate = getPromptTemplate(`target-${targetEnvironment}`, targetEnvironment);
 
@@ -283,16 +281,13 @@ export class PipelineOrchestrator {
     );
 
     recordMetrics(composerResult.metrics);
-    notify('composing', 'prompt_composer_done', 85, 'Промпты сформированы', {
-      analyzer: analyzerResult.data,
-      architect: architectResult.data,
-      composer: composerResult.data,
-    });
+    cumulativeIntermediate.composer = composerResult.data;
+    notify('composing', 'prompt_composer_done', 85, 'Промпты сформированы', cumulativeIntermediate);
 
     if (isCancelled()) throw new Error('JOB_CANCELLED');
 
     // STAGE 4: QUALITY REVIEWER & AUDIT
-    notify('reviewing', 'quality_reviewer', 90, 'Этап 4/4: Аудит качества и проверка матрицы трассируемости (gpt-6.1-terra)...');
+    notify('reviewing', 'quality_reviewer', 90, 'Этап 4/4: Аудит качества и проверка матрицы трассируемости (gpt-6.1-terra)...', cumulativeIntermediate);
     const reviewerTemplate = getPromptTemplate('quality-reviewer');
 
     const reviewerInput = `Original Primary Request:\n${rawPrompt}\n\nAdditional Mandatory System Instructions:\n${customInstructions || 'None specified'}\n\nRequirements:\n${JSON.stringify(analyzerResult.data, null, 2)}\n\nSystem Prompt Generated:\n${composerResult.data.systemPrompt}\n\nUser Prompt Generated:\n${composerResult.data.userPrompt}`;
@@ -366,13 +361,11 @@ export class PipelineOrchestrator {
       ? Math.round(stageMetrics.reduce((sum, m) => sum + (m.costUsd || 0), 0) * 1_000_000) / 1_000_000
       : null;
 
-    notify('completed', 'done', 100, 'Генерация успешно завершена (Quality Mode)', {
-      analyzer: analyzerResult.data,
-      architect: architectResult.data,
-      composer: finalPrompts,
-      reviewReport: finalReviewReport,
-      complexity,
-    });
+    cumulativeIntermediate.reviewReport = finalReviewReport;
+    cumulativeIntermediate.composer = finalPrompts;
+    cumulativeIntermediate.complexity = complexity;
+
+    notify('completed', 'done', 100, 'Генерация успешно завершена (Quality Mode)', cumulativeIntermediate);
 
     return {
       jobId,
